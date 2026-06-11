@@ -1,7 +1,8 @@
 /* ============================================================
-   STICK CARNAGE — Stickman Blood & Gore Fighting Game
+   STICK CARNAGE v2 — Stickman Blood & Gore Fighting Game (18+)
    40 main levels + 10 bonus arenas. A boss ends every level.
-   A new power is unlocked after every level (50 powers).
+   A new power after every level. A growing weapon arsenal.
+   Decapitations, headshots, blood fountains, fear & slow-mo.
    ============================================================ */
 'use strict';
 
@@ -10,11 +11,11 @@ const g = cv.getContext('2d');
 const W = 960, H = 540, GROUND = 470;
 const TAU = Math.PI * 2;
 const rnd = (a, b) => a + Math.random() * (b - a);
-const ri = (a, b) => Math.floor(rnd(a, b + 1));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+const TESTING = true; // testing phase: every level unlocked
 
 /* ---------------- input ---------------- */
 const keys = {}, once = {};
@@ -36,7 +37,7 @@ cv.addEventListener('mousemove', e => {
   my = (e.clientY - r.top) * (H / r.height);
 });
 cv.addEventListener('mousedown', () => { mclick = true; initAudio(); });
-const tap = k => { const v = once[k]; return !!v; };
+const tap = k => !!once[k];
 
 /* ---------------- audio (synthesized) ---------------- */
 let AC = null, muted = false;
@@ -63,23 +64,31 @@ function sfx(type) {
   switch (type) {
     case 'punch':  noise(0.08, 0.5, 900); tone(180, 60, 0.08, 0.3, 'square'); break;
     case 'kick':   noise(0.12, 0.6, 700); tone(140, 40, 0.12, 0.4, 'square'); break;
+    case 'slice':  noise(0.1, 0.5, 4000); tone(800, 200, 0.1, 0.25, 'sawtooth'); break;
     case 'squish': noise(0.22, 0.7, 500); tone(300, 50, 0.2, 0.35, 'sawtooth'); break;
     case 'gib':    noise(0.3, 0.8, 400); tone(220, 30, 0.3, 0.4, 'sawtooth'); break;
+    case 'decap':  noise(0.18, 0.7, 3000); noise(0.35, 0.8, 400); tone(500, 40, 0.3, 0.4, 'sawtooth'); break;
     case 'hurt':   tone(250, 90, 0.15, 0.4, 'square'); noise(0.1, 0.3, 1200); break;
     case 'boom':   noise(0.5, 0.9, 300); tone(120, 25, 0.5, 0.6, 'sine'); break;
     case 'shoot':  tone(900, 300, 0.1, 0.25, 'square'); break;
+    case 'gun':    noise(0.07, 0.7, 2500); tone(300, 80, 0.08, 0.4, 'square'); break;
+    case 'shotgun':noise(0.2, 0.9, 1500); tone(150, 40, 0.2, 0.5, 'square'); break;
+    case 'saw':    tone(120 + Math.random() * 60, 100, 0.08, 0.25, 'sawtooth'); noise(0.06, 0.2, 2000); break;
+    case 'flame':  noise(0.1, 0.18, 700); break;
     case 'dash':   noise(0.12, 0.3, 2500); break;
     case 'power':  tone(300, 900, 0.3, 0.3, 'square'); tone(450, 1350, 0.3, 0.2, 'square'); break;
     case 'boss':   tone(80, 40, 0.8, 0.6, 'sawtooth'); noise(0.6, 0.5, 200); break;
     case 'laser':  tone(1400, 200, 0.45, 0.35, 'sawtooth'); break;
     case 'select': tone(500, 750, 0.07, 0.2, 'square'); break;
     case 'zap':    tone(1800, 100, 0.18, 0.35, 'sawtooth'); noise(0.12, 0.4, 4000); break;
+    case 'scream': tone(rnd(600, 900), rnd(200, 400), 0.3, 0.2, 'sawtooth'); break;
   }
 }
 
 /* ---------------- save ---------------- */
 let save = { unlocked: 1 };
 try { const s = localStorage.getItem('stickCarnage'); if (s) save = JSON.parse(s); } catch (e) {}
+if (TESTING) save.unlocked = 50;
 function persist() { try { localStorage.setItem('stickCarnage', JSON.stringify(save)); } catch (e) {} }
 
 /* ---------------- zones ---------------- */
@@ -109,11 +118,32 @@ const BOSS_NAMES = [
   'VOIDSPAWN','ENTROPY','THE UNMAKER','OMEGA STITCH','DEATH INCARNATE',
 ];
 
-/* level layout: 50 levels. Bonus arenas: 5,10,15,20,25,30,35,40,45,49.
-   Level 50 = FINAL BOSS. => 40 main + 10 bonus. */
 function isBonusLevel(n) { return n === 49 || (n % 5 === 0 && n !== 50); }
 function zoneOf(n) { return ZONES[Math.min(9, Math.floor((n - 1) / 5))]; }
 function zoneIdx(n) { return Math.min(9, Math.floor((n - 1) / 5)); }
+
+/* ---------------- weapons (unlock as levels rise) ---------------- */
+const WEAPONS = [
+  { id: 'fists',    name: 'FISTS',        lvl: 1,  type: 'melee',  dmg: 11, range: 46, cd: 0.30, kb: 3,  gore: 1 },
+  { id: 'knife',    name: 'KNIFE',        lvl: 2,  type: 'melee',  dmg: 16, range: 46, cd: 0.24, kb: 2,  gore: 1.5, blade: true, decap: 0.3 },
+  { id: 'bat',      name: 'SPIKED BAT',   lvl: 4,  type: 'melee',  dmg: 22, range: 58, cd: 0.45, kb: 9,  gore: 1.3 },
+  { id: 'machete',  name: 'MACHETE',      lvl: 7,  type: 'melee',  dmg: 26, range: 56, cd: 0.38, kb: 4,  gore: 1.7, blade: true, decap: 0.45 },
+  { id: 'sword',    name: 'SWORD',        lvl: 10, type: 'melee',  dmg: 32, range: 68, cd: 0.42, kb: 5,  gore: 1.8, blade: true, decap: 0.5 },
+  { id: 'axe',      name: 'WAR AXE',      lvl: 13, type: 'melee',  dmg: 46, range: 60, cd: 0.62, kb: 10, gore: 2.2, blade: true, decap: 0.65 },
+  { id: 'spear',    name: 'SPEAR',        lvl: 16, type: 'melee',  dmg: 32, range: 92, cd: 0.5,  kb: 6,  gore: 1.4, blade: true, decap: 0.15 },
+  { id: 'pistol',   name: 'PISTOL',       lvl: 19, type: 'gun',    dmg: 18, cd: 0.3,  pspeed: 13, gore: 1.4 },
+  { id: 'uzi',      name: 'UZI',          lvl: 23, type: 'gun',    dmg: 9,  cd: 0.09, pspeed: 13, gore: 1.2, auto: true, spread: 0.09 },
+  { id: 'shotgun',  name: 'SHOTGUN',      lvl: 27, type: 'gun',    dmg: 12, cd: 0.75, pspeed: 12, gore: 2.4, pellets: 6, spread: 0.2, kb: 8 },
+  { id: 'katana',   name: 'KATANA',       lvl: 31, type: 'melee',  dmg: 40, range: 72, cd: 0.3,  kb: 4,  gore: 2.2, blade: true, decap: 0.7 },
+  { id: 'grenade',  name: 'GRENADES',     lvl: 35, type: 'thrown', dmg: 60, cd: 0.95, gore: 2.6 },
+  { id: 'flamer',   name: 'FLAMETHROWER', lvl: 39, type: 'flame',  dmg: 3.6, cd: 0.045, gore: 1.2, auto: true },
+  { id: 'laser',    name: 'LASER RIFLE',  lvl: 43, type: 'laser',  dmg: 34, cd: 0.55, gore: 2 },
+  { id: 'chainsaw', name: 'CHAINSAW',     lvl: 47, type: 'saw',    dmg: 5,  range: 56, cd: 0.05, gore: 3, blade: true, decap: 0.25, auto: true },
+];
+function weaponDmg(w) {
+  // arsenal grows sharper every level after a weapon is found
+  return w.dmg * (1 + Math.max(0, level - w.lvl) * 0.04) * playerDmg();
+}
 
 /* ---------------- powers (one per level, 50 total) ---------------- */
 const POWERS = [
@@ -193,18 +223,19 @@ function buildStats(powerCount) {
 }
 
 /* ---------------- world containers ---------------- */
-let particles = [], gibs = [], decals = [], projs = [], effects = [], texts = [], enemies = [];
+let particles = [], gibs = [], decals = [], projs = [], effects = [], texts = [], enemies = [], corpses = [];
 let P = null, boss = null;
-let shake = 0, hitstop = 0, flash = 0;
-let state = 'menu';            // menu | select | play | powerup | gameover | victory | pause
-let level = 1, wave = 0, totalWaves = 0, kills = 0, levelT = 0, banner = 0;
+let shake = 0, hitstop = 0, flash = 0, slowmo = 0;
+let state = 'menu';
+let level = 1, wave = 0, totalWaves = 0, kills = 0, levelT = 0, banner = 0, nowT = 0;
 let bossSpawned = false, bonusMode = false;
-let selCursor = save.unlocked;
+let streak = 0, streakT = 0;
 let menuPulse = 0;
 
 /* ---------------- blood & gore ---------------- */
 const BLOOD = ['#c40f0f', '#9e0b0b', '#e02222', '#7a0606'];
 function blood(x, y, n, dirx, power) {
+  if (particles.length > 600) return;
   for (let i = 0; i < n; i++) {
     particles.push({
       x, y: y + rnd(-14, 4), vx: (dirx || rnd(-1, 1)) * rnd(1, power || 5) + rnd(-2, 2),
@@ -213,27 +244,64 @@ function blood(x, y, n, dirx, power) {
     });
   }
 }
+function fountain(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    particles.push({
+      x: x + rnd(-2, 2), y, vx: rnd(-1.5, 1.5), vy: rnd(-9, -5),
+      r: rnd(1.5, 3.5), col: pick(BLOOD), life: rnd(0.7, 1.4), grav: 0.45, type: 'blood',
+    });
+  }
+}
 function addDecal(x, r) {
   decals.push({ x: x + rnd(-4, 4), y: GROUND + rnd(1, 26), r: r * rnd(0.8, 1.6), a: rnd(0.5, 0.9), col: pick(['#5e0505', '#700808', '#4a0404']) });
-  if (decals.length > 260) decals.splice(0, decals.length - 260);
+  if (decals.length > 300) decals.splice(0, decals.length - 300);
 }
-function gibBurst(x, y, col, scale, vx0) {
+function gibBurst(x, y, col, scale, vx0, goreMul) {
+  goreMul = goreMul || 1;
   sfx('gib');
-  blood(x, y - 20 * scale, 34, vx0 ? Math.sign(vx0) : 0, 7);
+  blood(x, y - 20 * scale, Math.round(30 * goreMul), vx0 ? Math.sign(vx0) : 0, 7);
   const parts = [
     { type: 'head', len: 7 * scale }, { type: 'torso', len: 20 * scale },
     { type: 'limb', len: 14 * scale }, { type: 'limb', len: 14 * scale },
     { type: 'limb', len: 16 * scale }, { type: 'limb', len: 16 * scale },
   ];
+  if (goreMul > 1.8) parts.push({ type: 'limb', len: 10 * scale }, { type: 'limb', len: 8 * scale });
   for (const pt of parts) {
     gibs.push({
       x: x + rnd(-6, 6), y: y - rnd(10, 40) * scale,
-      vx: (vx0 || 0) * 0.6 + rnd(-5, 5), vy: rnd(-9, -3),
+      vx: (vx0 || 0) * 0.6 + rnd(-5, 5) * goreMul, vy: rnd(-9, -3) * Math.min(1.4, goreMul),
       rot: rnd(0, TAU), vr: rnd(-0.4, 0.4), len: pt.len, type: pt.type,
       col, life: rnd(4, 7), lw: 3.5 * scale, bled: 0,
     });
   }
-  if (gibs.length > 90) gibs.splice(0, gibs.length - 90);
+  if (gibs.length > 110) gibs.splice(0, gibs.length - 110);
+}
+// blade kill: head rolls off, headless body stands spraying, then collapses
+function decapitate(e, kb) {
+  sfx('decap');
+  gibs.push({
+    x: e.x, y: e.y - 50 * (e.scale || 1), vx: (kb || 2) * 0.9 + rnd(-1, 3) * Math.sign(kb || 1),
+    vy: rnd(-8, -5), rot: rnd(0, TAU), vr: rnd(0.3, 0.7) * Math.sign(kb || 1),
+    len: 7 * (e.scale || 1), type: 'head', col: e.col, life: rnd(5, 8), lw: 3.5 * (e.scale || 1), bled: 0,
+  });
+  corpses.push({ x: e.x, y: e.y, vx: (kb || 0) * 0.15, facing: e.facing, col: e.col, scale: e.scale || 1, t: 0, rot: 0, fell: false, noHead: true });
+  if (corpses.length > 14) corpses.splice(0, corpses.length - 14);
+  blood(e.x, e.y - 48 * (e.scale || 1), 18, 0, 6);
+  floatText(e.x, e.y - 70, 'DECAPITATED!', '#ff3333', true);
+}
+function headPop(e) {
+  sfx('decap');
+  blood(e.x, e.y - 48 * (e.scale || 1), 30, 0, 8);
+  for (let i = 0; i < 5; i++) {
+    gibs.push({
+      x: e.x, y: e.y - 48 * (e.scale || 1), vx: rnd(-6, 6), vy: rnd(-8, -3),
+      rot: rnd(0, TAU), vr: rnd(-0.6, 0.6), len: rnd(2, 4) * (e.scale || 1), type: 'limb',
+      col: e.col, life: rnd(3, 5), lw: 2.5, bled: 0,
+    });
+  }
+  corpses.push({ x: e.x, y: e.y, vx: 0, facing: e.facing, col: e.col, scale: e.scale || 1, t: 0, rot: 0, fell: false, noHead: true });
+  if (corpses.length > 14) corpses.splice(0, corpses.length - 14);
+  floatText(e.x, e.y - 70, 'HEADSHOT!', '#ffe14d', true);
 }
 function floatText(x, y, str, col, big) {
   texts.push({ x, y, str, col: col || '#fff', life: 1, big: !!big });
@@ -245,10 +313,11 @@ function makePlayer() {
   return {
     x: 140, y: GROUND, vx: 0, vy: 0, facing: 1, onGround: true,
     hp: s.maxhp, energy: s.energyMax * 0.5, stats: s,
-    jumpsLeft: s.jumps, cd: 0, atkT: 0, atkType: null, dashT: 0, dashCd: 0,
+    jumpsLeft: s.jumps, cd: 0, atkT: 0, atkDur: 0.2, atkPose: null, dashT: 0, dashCd: 0,
     inv: 0, hurtT: 0, combo: 0, comboT: 0, legPh: 0, dead: false,
     secondWindUsed: false, bloodlustT: 0, dashHitSet: new Set(),
-    spinT: 0, castT: 0,
+    spinT: 0, castT: 0, lastJ: -9, lastK: -9, flameTick: 0,
+    weapons: WEAPONS.filter(w => w.lvl <= level), wIdx: 0,
   };
 }
 
@@ -275,7 +344,7 @@ function hitEnemies(x0, x1, dmg, kb, opts) {
     if (Math.random() < s.critC) { d *= s.critM; floatText(e.x, e.y - 70, 'CRIT!', '#ffe14d', true); }
     if (s.executioner && e.hp < e.maxhp * 0.25) d *= 2;
     if (isBoss) d *= s.bossDmg;
-    damageEnemy(e, d, kb * Math.sign(e.x - P.x || P.facing), isBoss);
+    damageEnemy(e, d, kb * Math.sign(e.x - P.x || P.facing), isBoss, opts.ctx);
     hitAny = true;
   };
   for (const e of enemies) tryHit(e, false);
@@ -283,7 +352,7 @@ function hitEnemies(x0, x1, dmg, kb, opts) {
   return hitAny;
 }
 
-function damageEnemy(e, d, kb, isBoss) {
+function damageEnemy(e, d, kb, isBoss, ctx) {
   e.hp -= d;
   e.hurtT = 0.18;
   if (!isBoss || !e.armored) { e.vx += kb * 0.25 * P.stats.kbMul; }
@@ -291,31 +360,58 @@ function damageEnemy(e, d, kb, isBoss) {
   if (P.stats.lifesteal) P.hp = Math.min(P.stats.maxhp, P.hp + d * P.stats.lifesteal);
   P.combo++; P.comboT = 2;
   if (e.hp <= 0) {
-    if (isBoss) killBoss(); else killEnemy(e, kb);
+    if (isBoss) killBoss(); else killEnemy(e, kb, ctx);
   } else { sfx('squish'); }
   shake = Math.min(14, shake + 2 + d * 0.05);
   hitstop = Math.max(hitstop, d > 30 ? 0.06 : 0.025);
 }
 
-function killEnemy(e, kb) {
+function killEnemy(e, kb, ctx) {
+  ctx = ctx || {};
   e.hp = 0; e.dead = true;
   kills++;
-  gibBurst(e.x, e.y, e.col, e.scale || 1, kb);
-  addDecal(e.x, rnd(8, 16)); addDecal(e.x + rnd(-20, 20), rnd(5, 10));
+  const gore = ctx.gore || 1;
+  if (ctx.headshot) headPop(e);
+  else if (ctx.blade && Math.random() < (ctx.decap || 0)) decapitate(e, kb);
+  else if (ctx.blade && Math.random() < 0.4) {
+    // cut clean in half
+    sfx('decap');
+    gibBurst(e.x, e.y, e.col, e.scale || 1, kb, gore * 1.3);
+    floatText(e.x, e.y - 70, 'SLICED IN HALF!', '#ff3333', true);
+  }
+  else gibBurst(e.x, e.y, e.col, e.scale || 1, kb, gore);
+  addDecal(e.x, rnd(8, 16) * gore); addDecal(e.x + rnd(-20, 20), rnd(5, 10));
   if (P.stats.killHeal) P.hp = Math.min(P.stats.maxhp, P.hp + P.stats.killHeal);
   if (P.stats.bloodlust) P.bloodlustT = 5;
   P.energy = Math.min(P.stats.energyMax, P.energy + 8);
-  floatText(e.x, e.y - 60, pick(['SPLAT!', 'REKT', 'SHREDDED', 'OBLITERATED', 'GORED']), '#ff3333', false);
+  if (!ctx.headshot && !ctx.blade) floatText(e.x, e.y - 60, pick(['SPLAT!', 'REKT', 'SHREDDED', 'OBLITERATED', 'GORED']), '#ff3333', false);
   shake = Math.min(16, shake + 5);
+  // kill streak satisfaction
+  streak++; streakT = 1.6;
+  if (streak === 3) { floatText(W / 2, 120, 'TRIPLE KILL', '#ffe14d', true); slowmo = Math.max(slowmo, 0.35); }
+  if (streak === 5) { floatText(W / 2, 120, '★ BLOODBATH ★', '#ff3333', true); slowmo = Math.max(slowmo, 0.5); sfx('boss'); }
+  if (streak === 8) { floatText(W / 2, 120, '★★ MASSACRE ★★', '#ff3333', true); slowmo = Math.max(slowmo, 0.6); }
+  if (streak >= 12 && streak % 4 === 0) { floatText(W / 2, 120, '☠ GENOCIDE ☠', '#ff0044', true); slowmo = Math.max(slowmo, 0.6); }
+  // last kill of a wave: brief savor
+  if (enemies.filter(x => !x.dead).length === 0 && !boss) slowmo = Math.max(slowmo, 0.45);
+  // nearby enemies witness the horror and may flee screaming
+  for (const o of enemies) {
+    if (!o.dead && o !== e && o.type !== 'brute' && o.fleeT <= 0 && Math.abs(o.x - e.x) < 240 && Math.random() < 0.4) {
+      o.fleeT = rnd(1.8, 3.5);
+      o.screamT = 0;
+      floatText(o.x, o.y - 70, '!', '#ffe14d', true);
+      sfx('scream');
+    }
+  }
 }
 
 function killBoss() {
   if (!boss || boss.dying) return;
   boss.dying = true; boss.hp = 0;
   sfx('boss'); sfx('gib');
-  shake = 26; hitstop = 0.25; flash = 0.5;
-  // a boss explodes into a storm of gore
-  for (let i = 0; i < 3; i++) gibBurst(boss.x + rnd(-20, 20), boss.y, boss.col, boss.scale, rnd(-6, 6));
+  shake = 26; hitstop = 0.25; flash = 0.5; slowmo = 1.1;
+  for (let i = 0; i < 3; i++) gibBurst(boss.x + rnd(-20, 20), boss.y, boss.col, boss.scale, rnd(-6, 6), 2);
+  decapitate(boss, P.facing * 6);
   blood(boss.x, boss.y - 40, 80, 0, 9);
   for (let i = 0; i < 6; i++) addDecal(boss.x + rnd(-70, 70), rnd(8, 20));
   floatText(boss.x, boss.y - 110, 'BOSS SLAIN', '#ffe14d', true);
@@ -328,7 +424,7 @@ function levelClear() {
   state = 'powerup';
   stateTimer = 0;
   banner = 0;
-  if (level >= save.unlocked) { save.unlocked = Math.min(50, level + 1); persist(); }
+  if (level >= save.unlocked && !TESTING) { save.unlocked = Math.min(50, level + 1); persist(); }
   sfx('power');
 }
 
@@ -344,9 +440,10 @@ function makeEnemy(type, x) {
     hp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
     maxhp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
     dmg: (5 + n * 0.38) * (type === 'brute' ? 1.6 : 1),
-    speed: { grunt: 1.6, runner: 3.4, brute: 1.1, ninja: 2.4, gunner: 1.4, bomber: 3.0, mage: 1.0, mageF: 0, shield: 1.2 }[type] + n * 0.02,
+    speed: { grunt: 1.6, runner: 3.4, brute: 1.1, ninja: 2.4, gunner: 1.4, bomber: 3.0, mage: 1.0, shield: 1.2 }[type] + n * 0.02,
     cd: rnd(0.5, 1.4), col: ECOL[type], scale: type === 'brute' ? 1.35 : type === 'shield' ? 1.15 : 1,
     hurtT: 0, legPh: rnd(0, TAU), dead: false, jumpCd: rnd(0.5, 2), t: 0,
+    fleeT: 0, screamT: 0, atkT: 0,
   };
 }
 
@@ -354,10 +451,10 @@ function spawnWave() {
   wave++;
   const zi = zoneIdx(level);
   const pool = ETYPES.slice(0, Math.min(8, 2 + zi));
-  let count = 3 + Math.floor(level / 7) + (bonusMode ? 3 : 0);
-  count = Math.min(count, 11);
+  let count = 4 + Math.floor(level / 6) + (bonusMode ? 3 : 0);
+  count = Math.min(count, 13);
   for (let i = 0; i < count; i++) {
-    const side = i % 2 === 0 ? rnd(W + 20, W + 160) : rnd(-160, -20);
+    const side = i % 2 === 0 ? rnd(W + 20, W + 180) : rnd(-180, -20);
     enemies.push(makeEnemy(pick(pool), side));
   }
   if (wave > 1) floatText(W / 2, 200, 'WAVE ' + wave + ' / ' + totalWaves, '#ffffff', true);
@@ -367,42 +464,51 @@ function updateEnemy(e, dt) {
   const f = dt * 60;
   e.t += dt;
   e.cd -= dt; e.hurtT -= dt; e.jumpCd -= dt;
-  e.facing = P.x > e.x ? 1 : -1;
   const dx = P.x - e.x, adx = Math.abs(dx);
   let want = 0;
 
-  if (e.hurtT > 0) {
-    // staggered
-  } else if (e.type === 'gunner') {
-    if (adx < 200) want = -e.facing; else if (adx > 320) want = e.facing;
-    if (e.cd <= 0 && adx < 460) {
-      e.cd = 1.5 - Math.min(0.7, level * 0.012);
-      sfx('shoot');
-      const a = Math.atan2((P.y - 30) - (e.y - 32), dx);
-      projs.push({ x: e.x + e.facing * 14, y: e.y - 32, vx: Math.cos(a) * 6.5, vy: Math.sin(a) * 6.5, r: 4, dmg: e.dmg, from: 'enemy', col: '#aaff66', life: 3 });
-    }
-  } else if (e.type === 'mage') {
-    if (adx < 240) want = -e.facing * 0.6; else if (adx > 360) want = e.facing * 0.6;
-    if (e.cd <= 0 && adx < 520) {
-      e.cd = 2.4;
-      projs.push({ x: e.x, y: e.y - 50, vx: e.facing * 2.5, vy: -2, r: 6, dmg: e.dmg * 1.2, from: 'enemy', col: '#ff7bd4', life: 4.5, homing: true });
-    }
-  } else if (e.type === 'bomber') {
-    want = e.facing;
-    if (adx < 34) { // detonate
-      explode(e.x, e.y - 20, 70, e.dmg * 2.2, 'enemy');
-      killEnemy(e, e.facing * 4);
-      return;
-    }
+  if (e.fleeT > 0) {
+    // running scared from the slaughter
+    e.fleeT -= dt;
+    e.facing = Math.sign(e.x - P.x) || 1;
+    want = e.facing * 1.4;
+    e.screamT -= dt;
+    if (e.screamT <= 0) { e.screamT = rnd(0.7, 1.2); if (Math.random() < 0.5) { floatText(e.x, e.y - 65, pick(['AAAH!', 'NO NO NO', 'RUN!!', 'HELP!']), '#ffd', false); sfx('scream'); } }
   } else {
-    if (adx > 30) want = e.facing;
-    if (e.type === 'ninja' && e.jumpCd <= 0 && e.onGround && adx < 260 && adx > 60) {
-      e.vy = -11; e.vx = e.facing * 7; e.jumpCd = rnd(1.5, 3);
-    }
-    if (e.cd <= 0 && adx < 38 + (e.scale - 1) * 20 && Math.abs(P.y - e.y) < 60) {
-      e.cd = e.type === 'brute' ? 1.4 : 0.9;
-      e.atkT = 0.2;
-      damagePlayer(e.dmg, e.facing * (e.type === 'brute' ? 7 : 3), e);
+    e.facing = P.x > e.x ? 1 : -1;
+    if (e.hurtT > 0) {
+      // staggered
+    } else if (e.type === 'gunner') {
+      if (adx < 200) want = -e.facing; else if (adx > 320) want = e.facing;
+      if (e.cd <= 0 && adx < 460) {
+        e.cd = 1.5 - Math.min(0.7, level * 0.012);
+        sfx('shoot');
+        const a = Math.atan2((P.y - 30) - (e.y - 32), dx);
+        projs.push({ x: e.x + e.facing * 14, y: e.y - 32, vx: Math.cos(a) * 6.5, vy: Math.sin(a) * 6.5, r: 4, dmg: e.dmg, from: 'enemy', col: '#aaff66', life: 3 });
+      }
+    } else if (e.type === 'mage') {
+      if (adx < 240) want = -e.facing * 0.6; else if (adx > 360) want = e.facing * 0.6;
+      if (e.cd <= 0 && adx < 520) {
+        e.cd = 2.4;
+        projs.push({ x: e.x, y: e.y - 50, vx: e.facing * 2.5, vy: -2, r: 6, dmg: e.dmg * 1.2, from: 'enemy', col: '#ff7bd4', life: 4.5, homing: true });
+      }
+    } else if (e.type === 'bomber') {
+      want = e.facing;
+      if (adx < 34) {
+        explode(e.x, e.y - 20, 70, e.dmg * 2.2, 'enemy');
+        killEnemy(e, e.facing * 4, { gore: 2 });
+        return;
+      }
+    } else {
+      if (adx > 30) want = e.facing;
+      if (e.type === 'ninja' && e.jumpCd <= 0 && e.onGround && adx < 260 && adx > 60) {
+        e.vy = -11; e.vx = e.facing * 7; e.jumpCd = rnd(1.5, 3);
+      }
+      if (e.cd <= 0 && adx < 38 + (e.scale - 1) * 20 && Math.abs(P.y - e.y) < 60) {
+        e.cd = e.type === 'brute' ? 1.4 : 0.9;
+        e.atkT = 0.2;
+        damagePlayer(e.dmg, e.facing * (e.type === 'brute' ? 7 : 3), e);
+      }
     }
   }
 
@@ -425,7 +531,7 @@ function explode(x, y, r, dmg, from) {
     if (Math.hypot(P.x - x, (P.y - 25) - y) < r) damagePlayer(dmg, Math.sign(P.x - x) * 6, null);
   }
   if (from === 'player' || from === 'both') {
-    for (const e of enemies) if (!e.dead && Math.hypot(e.x - x, (e.y - 25) - y) < r) damageEnemy(e, dmg, Math.sign(e.x - x) * 6, false);
+    for (const e of enemies) if (!e.dead && Math.hypot(e.x - x, (e.y - 25) - y) < r) damageEnemy(e, dmg, Math.sign(e.x - x) * 6, false, { gore: 2.4 });
     if (boss && Math.hypot(boss.x - x, (boss.y - 40) - y) < r + 24) damageEnemy(boss, dmg * P.stats.bossDmg, Math.sign(boss.x - x) * 3, true);
   }
 }
@@ -451,7 +557,7 @@ function damagePlayer(d, kb, src) {
       flash = 0.4;
     } else {
       P.dead = true;
-      gibBurst(P.x, P.y, '#ffffff', 1, kb);
+      gibBurst(P.x, P.y, '#ffffff', 1, kb, 1.5);
       addDecal(P.x, 14);
       shake = 22;
       stateTimer = 0;
@@ -478,7 +584,7 @@ function makeBoss() {
     scale: n === 50 ? 2.6 : 1.9 + zi * 0.05, col: z.accent,
     state: 'intro', t: 1.4, next: null, hurtT: 0, legPh: 0,
     enraged: false, dying: false, visible: true, atkT: 0,
-    beamY: 0, armored: true, summonCount: 0, t2: 0,
+    beamY: 0, armored: true, t2: 0, fleeT: 0,
   };
 }
 
@@ -520,7 +626,6 @@ function updateBoss(b, dt) {
       const dx = P.x - b.x;
       if (Math.abs(dx) > 90) b.vx += Math.sign(dx) * spd * 0.12 * f;
       if (Math.abs(dx) < 60 * b.scale && b.t < 0.3 && Math.abs(P.y - b.y) < 70) {
-        // close-range swipe
         b.atkT = 0.25;
         damagePlayer(b.dmg, b.facing * 6, b);
         b.t = 0.9;
@@ -547,7 +652,6 @@ function updateBoss(b, dt) {
       break;
     case 'slam':
       if (b.onGround && b.t < 0.8) {
-        // landed: shockwave
         sfx('boom');
         shake = Math.min(20, shake + 10);
         effects.push({ type: 'shockwave', x: b.x, y: GROUND, t: 0, dur: 0.55, r: 0, maxR: 220, col: b.col, from: 'enemy', dmg: b.dmg * 1.2, hitSet: new Set() });
@@ -655,7 +759,7 @@ function castSpecial() {
       let px = P.x, py = P.y - 40;
       for (const e of targets) {
         effects.push({ type: 'bolt', x1: px, y1: py, x2: e.x, y2: e.y - 35 * (e.scale || 1), t: 0, dur: 0.25 });
-        damageEnemy(e, dmgBase * 1.2 * (e.isBoss ? P.stats.bossDmg : 1), Math.sign(e.x - P.x) * 3, !!e.isBoss);
+        damageEnemy(e, dmgBase * 1.2 * (e.isBoss ? P.stats.bossDmg : 1), Math.sign(e.x - P.x) * 3, !!e.isBoss, { gore: 1.6 });
         px = e.x; py = e.y - 35;
       }
       if (!targets.length) effects.push({ type: 'bolt', x1: px, y1: py, x2: px + P.facing * 200, y2: py, t: 0, dur: 0.25 });
@@ -681,7 +785,7 @@ function castSpecial() {
       sfx('boom'); sfx('boss');
       flash = 0.8; shake = 28; hitstop = 0.12;
       effects.push({ type: 'explosion', x: W / 2, y: GROUND - 100, t: 0, dur: 0.9, r: 600, col: '#ff2222' });
-      for (const e of enemies) if (!e.dead) damageEnemy(e, dmgBase * 4, Math.sign(e.x - P.x) * 10, false);
+      for (const e of enemies) if (!e.dead) damageEnemy(e, dmgBase * 4, Math.sign(e.x - P.x) * 10, false, { gore: 2.6 });
       if (boss) damageEnemy(boss, dmgBase * 3 * P.stats.bossDmg, Math.sign(boss.x - P.x) * 6, true);
       for (let i = 0; i < 8; i++) addDecal(rnd(40, W - 40), rnd(6, 14));
       break;
@@ -689,12 +793,122 @@ function castSpecial() {
   }
 }
 
+/* ---------------- weapon attacks ---------------- */
+function meleeAttack(w, double) {
+  const s = P.stats;
+  const mult = double ? 2.3 : 1;
+  P.cd = (w.cd * (double ? 1.4 : 1)) / s.atkSpd;
+  P.atkDur = double ? 0.34 : 0.22;
+  P.atkT = P.atkDur;
+  P.atkPose = w.id === 'fists' ? (double ? 'punch2' : 'punch') : (w.blade && w.range < 50 ? 'stab' : 'slash');
+  const ctx = { blade: w.blade, decap: w.decap || 0, gore: w.gore || 1 };
+  const hit = hitEnemies(P.x, P.x + P.facing * w.range * s.range, weaponDmg(w) * mult, (w.kb || 3), { yBand: P.y - 30, ctx });
+  sfx(hit ? (w.blade ? 'slice' : w.id === 'fists' ? 'punch' : 'kick') : 'dash');
+  if (double) floatText(P.x + P.facing * 30, P.y - 70, 'DOUBLE!', '#ffe14d', false);
+}
+
+function kickAttack(double) {
+  const s = P.stats;
+  const air = !P.onGround;
+  const mult = (double ? 2.2 : 1) * (air ? 1.8 : 1);
+  P.cd = (0.5 * (double ? 1.4 : 1)) / s.atkSpd;
+  P.atkDur = air ? 0.32 : double ? 0.36 : 0.28;
+  P.atkT = P.atkDur;
+  P.atkPose = air ? 'jumpkick' : double ? 'kick2' : 'kick';
+  const range = (air ? 66 : 58) * s.range;
+  const hit = hitEnemies(P.x, P.x + P.facing * range, 17 * playerDmg() * s.kickMul * mult, air ? 9 : 6, { yBand: P.y - 30, ctx: { gore: air ? 1.5 : 1 } });
+  sfx(hit ? 'kick' : 'dash');
+  if (air && hit) floatText(P.x + P.facing * 40, P.y - 80, 'FLYING KICK!', '#7ec8ff', false);
+  else if (double) floatText(P.x + P.facing * 30, P.y - 70, 'DOUBLE KICK!', '#ffe14d', false);
+}
+
+function gunAttack(w) {
+  const s = P.stats;
+  P.cd = w.cd / s.atkSpd;
+  P.atkDur = 0.16; P.atkT = 0.16; P.atkPose = 'shoot';
+  sfx(w.pellets ? 'shotgun' : 'gun');
+  const hy = P.y - 32;
+  const n = w.pellets || 1;
+  for (let i = 0; i < n; i++) {
+    const a = (rnd(-1, 1) * (w.spread || 0.02));
+    projs.push({
+      x: P.x + P.facing * 22, y: hy + rnd(-2, 2),
+      vx: P.facing * (w.pspeed || 13) * Math.cos(a), vy: (w.pspeed || 13) * Math.sin(a),
+      r: 3, dmg: weaponDmg(w), from: 'player', col: '#ffd866', life: 1.2, gun: true, gore: w.gore,
+    });
+  }
+  // muzzle flash + recoil
+  particles.push({ x: P.x + P.facing * 26, y: hy, vx: P.facing * 2, vy: 0, r: 7, col: '#ffe89a', life: 0.06, grav: 0, type: 'ghost' });
+  P.vx -= P.facing * (w.pellets ? 3 : 0.8);
+  shake = Math.min(10, shake + (w.pellets ? 4 : 1.5));
+}
+
+function grenadeAttack(w) {
+  P.cd = w.cd / P.stats.atkSpd;
+  P.atkDur = 0.2; P.atkT = 0.2; P.atkPose = 'slash';
+  sfx('dash');
+  projs.push({
+    x: P.x + P.facing * 14, y: P.y - 40, vx: P.facing * 7.5, vy: -6.5,
+    r: 5, dmg: weaponDmg(w), from: 'player', col: '#9db864', life: 4,
+    explosive: true, grenade: true, grav: 0.35,
+  });
+}
+
+function flameAttack(w, dt) {
+  P.cd = w.cd;
+  P.atkDur = 0.12; P.atkT = 0.12; P.atkPose = 'shoot';
+  sfx('flame');
+  const hy = P.y - 32;
+  for (let i = 0; i < 3; i++) {
+    particles.push({
+      x: P.x + P.facing * 26, y: hy + rnd(-4, 4),
+      vx: P.facing * rnd(6, 10), vy: rnd(-1.5, 0.5), r: rnd(3, 6),
+      col: pick(['#ff7a2a', '#ffb347', '#ff4411']), life: rnd(0.25, 0.45), grav: -0.05, type: 'flame',
+    });
+  }
+  // cone damage
+  for (const e of enemies) {
+    if (!e.dead && Math.sign(e.x - P.x) === P.facing && Math.abs(e.x - P.x) < 150 && Math.abs((e.y - 28) - hy) < 55) {
+      damageEnemy(e, weaponDmg(w), P.facing * 0.6, false, { gore: w.gore });
+    }
+  }
+  if (boss && Math.sign(boss.x - P.x) === P.facing && Math.abs(boss.x - P.x) < 160 && Math.abs(boss.y - P.y) < 80) {
+    damageEnemy(boss, weaponDmg(w) * P.stats.bossDmg, P.facing * 0.2, true);
+  }
+}
+
+function laserAttack(w) {
+  P.cd = w.cd / P.stats.atkSpd;
+  P.atkDur = 0.2; P.atkT = 0.2; P.atkPose = 'shoot';
+  sfx('laser');
+  const hy = P.y - 32;
+  effects.push({ type: 'pbeam', x: P.x + P.facing * 24, y: hy, dir: P.facing, t: 0, dur: 0.22 });
+  for (const e of enemies) {
+    if (!e.dead && Math.sign(e.x - P.x) === P.facing && Math.abs((e.y - 28) - hy) < 34) {
+      damageEnemy(e, weaponDmg(w), P.facing * 4, false, { gore: w.gore, headshot: Math.random() < 0.15 });
+    }
+  }
+  if (boss && Math.sign(boss.x - P.x) === P.facing && Math.abs((boss.y - 45) - hy) < 70) {
+    damageEnemy(boss, weaponDmg(w) * P.stats.bossDmg, P.facing * 2, true);
+  }
+  shake = Math.min(10, shake + 3);
+}
+
+function sawAttack(w) {
+  P.cd = w.cd;
+  P.atkDur = 0.1; P.atkT = 0.1; P.atkPose = 'shoot';
+  if (Math.random() < 0.4) sfx('saw');
+  const ctx = { blade: true, decap: w.decap, gore: w.gore };
+  const hit = hitEnemies(P.x, P.x + P.facing * w.range * P.stats.range, weaponDmg(w), 0.5, { yBand: P.y - 30, ctx });
+  if (hit) blood(P.x + P.facing * 40, P.y - 30, 4, P.facing, 6);
+}
+
 /* ---------------- player update ---------------- */
 function updatePlayer(dt) {
   const f = dt * 60;
   const s = P.stats;
   P.cd -= dt; P.inv -= dt; P.hurtT -= dt; P.dashCd -= dt; P.comboT -= dt;
-  P.bloodlustT -= dt; P.castT -= dt;
+  P.bloodlustT -= dt; P.castT -= dt; P.atkT -= dt;
   if (P.comboT <= 0) P.combo = 0;
   if (s.regen) P.hp = Math.min(s.maxhp, P.hp + s.regen * dt);
   P.energy = Math.min(s.energyMax, P.energy + (8 * s.energyRegen) * dt);
@@ -725,7 +939,7 @@ function updatePlayer(dt) {
     P.vy = -12.5 * s.jumpMul;
     P.jumpsLeft--;
     P.onGround = false;
-    if (!P.onGround) particles.push({ x: P.x, y: P.y, vx: 0, vy: 0, r: 8, col: 'rgba(255,255,255,0.2)', life: 0.25, grav: 0, type: 'ghost' });
+    particles.push({ x: P.x, y: P.y, vx: 0, vy: 0, r: 8, col: 'rgba(255,255,255,0.2)', life: 0.25, grav: 0, type: 'ghost' });
   }
 
   if (tap('Shift') && s.dash && P.dashCd <= 0 && (P.onGround || s.airDash)) {
@@ -734,30 +948,45 @@ function updatePlayer(dt) {
     sfx('dash');
   }
 
-  // attacks
-  const punchCd = 0.30 / s.atkSpd, kickCd = 0.5 / s.atkSpd;
-  if ((tap('j') || tap('z')) && P.cd <= 0) {
-    P.cd = punchCd; P.atkT = 0.18; P.atkType = 'punch';
-    const range = 46 * s.range;
-    const hit = hitEnemies(P.x, P.x + P.facing * range, 11 * playerDmg(), 3, { yBand: P.y - 30 });
-    sfx(hit ? 'punch' : 'dash');
+  // weapon switching: Q/E cycle, 1-9/0 direct
+  if (tap('q')) { P.wIdx = (P.wIdx - 1 + P.weapons.length) % P.weapons.length; sfx('select'); }
+  if (tap('e')) { P.wIdx = (P.wIdx + 1) % P.weapons.length; sfx('select'); }
+  for (let i = 0; i < 10; i++) {
+    if (tap(String((i + 1) % 10)) && P.weapons[i]) { P.wIdx = i; sfx('select'); }
   }
-  if ((tap('k') || tap('x')) && P.cd <= 0) {
-    P.cd = kickCd; P.atkT = 0.26; P.atkType = 'kick';
-    const range = 58 * s.range;
-    const hit = hitEnemies(P.x, P.x + P.facing * range, 17 * playerDmg() * s.kickMul, 6, { yBand: P.y - 30 });
-    sfx(hit ? 'kick' : 'dash');
+  const w = P.weapons[P.wIdx] || WEAPONS[0];
+
+  // primary attack [J] — held for auto weapons; for melee a second tap
+  // during the first swing chains into a double strike
+  const jDown = w.auto ? (keys['j'] || keys['z']) : (tap('j') || tap('z'));
+  if (jDown) {
+    if (P.cd <= 0) {
+      if (w.type === 'melee' && !w.auto) { P.lastJ = nowT; P.jDoubled = false; meleeAttack(w, false); }
+      else if (w.type === 'gun') gunAttack(w);
+      else if (w.type === 'thrown') grenadeAttack(w);
+      else if (w.type === 'flame') flameAttack(w, dt);
+      else if (w.type === 'laser') laserAttack(w);
+      else if (w.type === 'saw') sawAttack(w);
+    } else if (w.type === 'melee' && !w.auto && !P.jDoubled && nowT - P.lastJ < 0.45) {
+      P.jDoubled = true;
+      meleeAttack(w, true);
+    }
+  }
+
+  // kick [K] — kung-fu roundhouse; second tap chains a double kick; airborne = flying kick
+  if (tap('k') || tap('x')) {
+    if (P.cd <= 0) { P.lastK = nowT; P.kDoubled = false; kickAttack(false); }
+    else if (!P.kDoubled && nowT - P.lastK < 0.45) { P.kDoubled = true; kickAttack(true); }
   }
   if ((tap('l') || tap('c')) && P.castT <= 0) castSpecial();
 
-  // tornado spin
   if (P.spinT > 0) {
     P.spinT -= dt;
     P.spinTick = (P.spinTick || 0) - dt;
     if (P.spinTick <= 0) {
       P.spinTick = 0.12;
       sfx('dash');
-      hitEnemies(P.x - 80, P.x + 80, 9 * playerDmg(), 4, {});
+      hitEnemies(P.x - 80, P.x + 80, 9 * playerDmg(), 4, { ctx: { blade: true, decap: 0.1, gore: 1.5 } });
       particles.push({ x: P.x + rnd(-30, 30), y: P.y - rnd(0, 50), vx: rnd(-3, 3), vy: rnd(-3, 0), r: 4, col: '#cfd8ff', life: 0.3, grav: 0, type: 'ghost' });
     }
   }
@@ -778,6 +1007,7 @@ function updateProjs(dt) {
   for (let i = projs.length - 1; i >= 0; i--) {
     const p = projs[i];
     p.life -= dt;
+    if (p.grav) p.vy += p.grav * f;
     if (p.homing && !P.dead) {
       const a = Math.atan2((P.y - 28) - p.y, P.x - p.x);
       p.vx = lerp(p.vx, Math.cos(a) * 4.5, 0.04 * f);
@@ -786,7 +1016,7 @@ function updateProjs(dt) {
     p.x += p.vx * f; p.y += p.vy * f;
     let dead = p.life <= 0 || p.x < -60 || p.x > W + 60;
     if (p.y > GROUND) {
-      if (p.explosive) { explode(p.x, GROUND - 10, p.meteor ? 80 : 70, p.dmg, p.from === 'player' ? 'player' : 'enemy'); }
+      if (p.explosive) { explode(p.x, GROUND - 10, p.meteor || p.grenade ? 85 : 70, p.dmg, p.from === 'player' ? 'player' : 'enemy'); }
       dead = true;
     }
     if (!dead && p.from === 'enemy') {
@@ -797,13 +1027,17 @@ function updateProjs(dt) {
     } else if (!dead && p.from === 'player') {
       for (const e of enemies) {
         if (!e.dead && Math.abs(e.x - p.x) < 18 * e.scale && Math.abs((e.y - 28) - p.y) < 36) {
-          if (p.explosive) explode(p.x, p.y, p.meteor ? 80 : 70, p.dmg, 'player');
-          else damageEnemy(e, p.dmg, Math.sign(p.vx) * 4, false);
+          if (p.explosive) explode(p.x, p.y, p.meteor || p.grenade ? 85 : 70, p.dmg, 'player');
+          else {
+            const head = p.gun && p.y < e.y - 40 * e.scale;
+            damageEnemy(e, p.dmg * (head ? 1.7 : 1), Math.sign(p.vx) * (p.gun ? 4 : 4), false, { gore: p.gore || 1, headshot: head });
+            if (p.gun) blood(e.x + Math.sign(p.vx) * 8, p.y, 8, Math.sign(p.vx), 6); // exit wound
+          }
           dead = true; break;
         }
       }
       if (!dead && boss && Math.abs(boss.x - p.x) < 26 * boss.scale && Math.abs((boss.y - 45) - p.y) < 60) {
-        if (p.explosive) explode(p.x, p.y, 80, p.dmg, 'player');
+        if (p.explosive) explode(p.x, p.y, 85, p.dmg, 'player');
         else damageEnemy(boss, p.dmg * P.stats.bossDmg, Math.sign(p.vx) * 2, true);
         dead = true;
       }
@@ -852,7 +1086,7 @@ function updateEffects(dt) {
       if (boss) pull(boss, true);
       if (e.tick <= 0) {
         e.tick = 0.25;
-        for (const en of enemies) if (!en.dead && Math.hypot(en.x - e.x, (en.y - 30) - e.y) < 90) damageEnemy(en, e.dmg, 0, false);
+        for (const en of enemies) if (!en.dead && Math.hypot(en.x - e.x, (en.y - 30) - e.y) < 90) damageEnemy(en, e.dmg, 0, false, { gore: 1.6 });
         if (boss && Math.hypot(boss.x - e.x, (boss.y - 45) - e.y) < 110) damageEnemy(boss, e.dmg * P.stats.bossDmg, 0, true);
       }
     }
@@ -860,6 +1094,32 @@ function updateEffects(dt) {
       if (e.type === 'blackhole') { explode(e.x, e.y, 110, e.dmg * 3, 'player'); }
       effects.splice(i, 1);
     }
+  }
+}
+
+function updateCorpses(dt) {
+  for (let i = corpses.length - 1; i >= 0; i--) {
+    const c = corpses[i];
+    c.t += dt;
+    c.x += c.vx * dt * 60;
+    c.vx *= 0.9;
+    // arterial fountain while standing
+    if (c.t < 0.9 && c.noHead) {
+      const neckX = c.x + Math.sin(c.rot) * 52 * c.scale * -c.facing;
+      const neckY = c.y - Math.cos(c.rot) * 52 * c.scale;
+      fountain(neckX, neckY, 3);
+    }
+    // body crumples after a moment
+    if (c.t > 0.7 && !c.fell) {
+      c.rot = Math.min(1.55, (c.t - 0.7) * 5) * -c.facing;
+      if (c.rot * -c.facing >= 1.55) {
+        c.fell = true;
+        addDecal(c.x - c.facing * 30, 12); addDecal(c.x - c.facing * 50, 8);
+        blood(c.x - c.facing * 40, GROUND - 5, 8, -c.facing, 3);
+        sfx('squish');
+      }
+    }
+    if (c.t > 5) corpses.splice(i, 1);
   }
 }
 
@@ -887,7 +1147,12 @@ function updateParticles(dt) {
       if (Math.abs(gb.vy) > 2) {
         gb.vy *= -0.45; gb.vx *= 0.6;
         if (gb.bled < 3) { gb.bled++; blood(gb.x, gb.y, 3, 0, 2); addDecal(gb.x, rnd(3, 7)); }
-      } else { gb.vy = 0; gb.vx *= 0.8; gb.vr *= 0.8; }
+      } else {
+        gb.vy = 0; gb.vx *= 0.8;
+        // severed heads keep rolling
+        if (gb.type === 'head' && Math.abs(gb.vx) > 0.3) gb.vr = gb.vx / gb.len;
+        else gb.vr *= 0.8;
+      }
     }
     if (gb.life <= 0) gibs.splice(i, 1);
   }
@@ -902,17 +1167,23 @@ function updateParticles(dt) {
 function startLevel(n) {
   level = n;
   bonusMode = isBonusLevel(n);
-  particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = [];
+  particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = []; corpses = [];
   boss = null; bossSpawned = false;
   wave = 0; kills = 0; levelT = 0; banner = 2.6;
+  streak = 0; streakT = 0;
   totalWaves = bonusMode ? 3 : Math.min(4, 2 + Math.floor(n / 14));
   P = makePlayer();
+  P.wIdx = P.weapons.length - 1; // newest weapon equipped
+  const nw = WEAPONS.find(w => w.lvl === n);
+  if (nw) floatText(W / 2, 240, 'NEW WEAPON: ' + nw.name, '#7ec8ff', true);
   state = 'play';
   spawnWave();
 }
 
 function updatePlay(dt) {
   levelT += dt; banner -= dt;
+  streakT -= dt;
+  if (streakT <= 0) streak = 0;
   if (!P.dead) updatePlayer(dt);
   for (let i = enemies.length - 1; i >= 0; i--) {
     if (enemies[i].dead) { enemies.splice(i, 1); continue; }
@@ -921,8 +1192,8 @@ function updatePlay(dt) {
   if (boss) updateBoss(boss, dt);
   updateProjs(dt);
   updateEffects(dt);
+  updateCorpses(dt);
 
-  // wave / boss progression
   if (!bossSpawned && enemies.length === 0) {
     if (wave < totalWaves) spawnWave();
     else {
@@ -937,6 +1208,9 @@ function updatePlay(dt) {
 /* ============================================================
    RENDERING
    ============================================================ */
+function seg2(ax, ay, bx, by, cx, cy) {
+  g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cx, cy); g.stroke();
+}
 function drawLimb(ax, ay, bx, by, bend) {
   const mxp = (ax + bx) / 2, myp = (ay + by) / 2;
   const dx = bx - ax, dy = by - ay;
@@ -947,7 +1221,82 @@ function drawLimb(ax, ay, bx, by, bend) {
   g.quadraticCurveTo(mxp + nx * bend, myp + ny * bend, bx, by);
   g.stroke();
 }
+function fist(x, y, s, col) {
+  g.fillStyle = col;
+  g.beginPath(); g.arc(x, y, 2.4 * s, 0, TAU); g.fill();
+}
 
+function drawWeapon(id, hx, hy, ang, s, col) {
+  g.save();
+  g.translate(hx, hy);
+  g.rotate(ang);
+  g.strokeStyle = '#c9d2dd'; g.lineWidth = 2.5 * s; g.lineCap = 'round';
+  const L = x => x * s;
+  switch (id) {
+    case 'knife':
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(L(11), 0); g.stroke(); break;
+    case 'machete':
+      g.lineWidth = 3 * s;
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(L(16), 0); g.stroke(); break;
+    case 'sword':
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(L(22), 0); g.stroke();
+      g.beginPath(); g.moveTo(L(3), -L(4)); g.lineTo(L(3), L(4)); g.stroke(); break;
+    case 'katana':
+      g.strokeStyle = '#e8eef5';
+      g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(L(13), -L(2.5), L(25), -L(4)); g.stroke(); break;
+    case 'axe':
+      g.strokeStyle = '#8a6a3a';
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(L(17), 0); g.stroke();
+      g.fillStyle = '#c9d2dd';
+      g.beginPath(); g.moveTo(L(14), -L(7)); g.lineTo(L(22), 0); g.lineTo(L(14), L(7)); g.closePath(); g.fill(); break;
+    case 'bat':
+      g.strokeStyle = '#8a6a3a'; g.lineWidth = 4 * s;
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(L(17), 0); g.stroke();
+      g.fillStyle = '#c9d2dd';
+      for (let i = 6; i <= 15; i += 3) { g.beginPath(); g.arc(L(i), (i % 2 ? -1 : 1) * L(3), 1.4 * s, 0, TAU); g.fill(); }
+      break;
+    case 'spear':
+      g.strokeStyle = '#8a6a3a';
+      g.beginPath(); g.moveTo(-L(6), 0); g.lineTo(L(28), 0); g.stroke();
+      g.fillStyle = '#c9d2dd';
+      g.beginPath(); g.moveTo(L(28), -L(3)); g.lineTo(L(35), 0); g.lineTo(L(28), L(3)); g.closePath(); g.fill(); break;
+    case 'pistol':
+      g.fillStyle = '#3c4250';
+      g.fillRect(0, -L(3), L(9), L(4)); g.fillRect(0, 0, L(3), L(5)); break;
+    case 'uzi':
+      g.fillStyle = '#3c4250';
+      g.fillRect(0, -L(3.5), L(12), L(5)); g.fillRect(L(3), 0, L(3), L(7)); break;
+    case 'shotgun':
+      g.fillStyle = '#3c4250';
+      g.fillRect(0, -L(3), L(18), L(4));
+      g.fillStyle = '#8a6a3a'; g.fillRect(-L(4), -L(2), L(6), L(4)); break;
+    case 'flamer':
+      g.fillStyle = '#7a3434';
+      g.fillRect(0, -L(4), L(14), L(6));
+      g.fillStyle = '#ffb347';
+      g.beginPath(); g.arc(L(15), -L(1), 2 * s, 0, TAU); g.fill(); break;
+    case 'laser':
+      g.fillStyle = '#2a3a55';
+      g.fillRect(0, -L(3), L(17), L(4));
+      g.fillStyle = '#6df';
+      g.fillRect(L(15), -L(2.5), L(4), L(3)); break;
+    case 'chainsaw':
+      g.fillStyle = '#7a3434';
+      g.fillRect(0, -L(5), L(7), L(8));
+      g.fillStyle = '#c9d2dd';
+      g.fillRect(L(6), -L(3), L(13), L(4));
+      g.strokeStyle = '#888'; g.lineWidth = 1.5;
+      g.beginPath();
+      for (let i = 0; i < 6; i++) { g.moveTo(L(7 + i * 2), -L(4)); g.lineTo(L(8 + i * 2), -L(3)); }
+      g.stroke(); break;
+    case 'grenade':
+      g.fillStyle = '#5a7a3a';
+      g.beginPath(); g.arc(L(2), 0, 3 * s, 0, TAU); g.fill(); break;
+  }
+  g.restore();
+}
+
+/* kung-fu stickman renderer */
 function drawStick(x, y, s, col, facing, o) {
   o = o || {};
   g.strokeStyle = col;
@@ -955,55 +1304,164 @@ function drawStick(x, y, s, col, facing, o) {
   g.lineCap = 'round';
   const run = o.run || 0;
   const ph = o.legPh || 0;
-  const lean = run ? facing * 4 * s : 0;
-  const crouch = o.pose === 'hurt' ? 4 * s : 0;
-  const hipX = x, hipY = y - 26 * s + crouch;
-  const shX = x + lean, shY = y - 44 * s + crouch;
-  // head
+  const t = clamp(o.t || 0, 0, 1);
+  const ext = Math.sin(t * Math.PI); // attack extension curve
+  const pose = o.pose || 'guard';
+  const time = o.time || 0;
+  const bob = (pose === 'guard' && run < 0.3) ? Math.sin(time * 3) * 1.3 * s : 0;
+
+  let lean = 0;
+  if (run > 0.3) lean = facing * 5 * s;
+  if (pose === 'punch' || pose === 'punch2' || pose === 'stab') lean = facing * 4 * s * ext;
+  if (pose === 'kick' || pose === 'kick2') lean = -facing * 7 * s * ext;
+  if (pose === 'jumpkick') lean = facing * 11 * s;
+  if (pose === 'slash') lean = facing * 6 * s * ext;
+  if (pose === 'hurt') lean = -facing * 5 * s;
+
+  const hipX = x, hipY = y - 26 * s + bob;
+  const shX = x + lean, shY = y - 44 * s + bob;
   const hx = shX + facing * 2 * s, hy = shY - 8 * s;
-  g.beginPath(); g.arc(hx, hy, 7 * s, 0, TAU); g.stroke();
-  if (o.eyes) {
-    g.fillStyle = o.eyes;
-    g.beginPath(); g.arc(hx + facing * 3 * s, hy - 1.5 * s, 1.6 * s, 0, TAU); g.fill();
+
+  // head (or gushing neck stub)
+  if (!o.noHead) {
+    g.beginPath(); g.arc(hx, hy, 7 * s, 0, TAU); g.stroke();
+    if (o.eyes) {
+      g.fillStyle = o.eyes;
+      g.beginPath(); g.arc(hx + facing * 3 * s, hy - 1.5 * s, 1.6 * s, 0, TAU); g.fill();
+    }
+  } else {
+    g.fillStyle = '#a00';
+    g.beginPath(); g.arc(shX, shY - 2 * s, 3.5 * s, 0, TAU); g.fill();
   }
   // spine
   g.beginPath(); g.moveTo(shX, shY); g.lineTo(hipX, hipY); g.stroke();
-  // legs
-  if (o.pose === 'jump') {
-    drawLimb(hipX, hipY, hipX - facing * 7 * s, y - 8 * s, facing * 5 * s);
-    drawLimb(hipX, hipY, hipX + facing * 9 * s, y - 12 * s, facing * 5 * s);
-  } else if (o.pose === 'kick') {
-    const t = o.t || 0;
-    const ext = Math.sin(Math.min(1, t) * Math.PI);
-    drawLimb(hipX, hipY, hipX - facing * 6 * s, y, facing * 4 * s);
-    drawLimb(hipX, hipY, hipX + facing * (10 + 22 * ext) * s, hipY - 2 * s + (1 - ext) * 18 * s, -facing * 4 * s);
+
+  /* ---- legs ---- */
+  const L = 26 * s; // full leg length
+  if (pose === 'kick' || pose === 'kick2') {
+    // roundhouse: foot sweeps an arc from the ground up past head height
+    const a = ext * 1.9; // 0 = straight down, ~1.9 = above horizontal
+    const fx = hipX + facing * Math.sin(a) * L;
+    const fy = hipY + Math.cos(a) * L;
+    const ka = a * 0.6;
+    seg2(hipX, hipY, hipX + facing * Math.sin(ka) * L * 0.55, hipY + Math.cos(ka) * L * 0.55, fx, fy);
+    fist(fx, fy, s * 1.1, col);
+    if (pose === 'kick2') {
+      const a2 = Math.max(0.2, ext * 1.2);
+      const fx2 = hipX + facing * Math.sin(a2) * L;
+      const fy2 = hipY + Math.cos(a2) * L;
+      seg2(hipX, hipY, hipX + facing * Math.sin(a2 * 0.6) * L * 0.55, hipY + Math.cos(a2 * 0.6) * L * 0.55, fx2, fy2);
+      fist(fx2, fy2, s, col);
+    } else {
+      // support leg, slightly bent
+      seg2(hipX, hipY, hipX - facing * 4 * s, y - 10 * s, hipX - facing * 7 * s, y);
+    }
+    // motion arc behind the kick
+    g.globalAlpha *= 0.35;
+    g.beginPath(); g.arc(hipX, hipY, L * 0.95, facing > 0 ? 0.4 : Math.PI - 1.6, facing > 0 ? 1.6 : Math.PI - 0.4); g.stroke();
+    g.globalAlpha /= 0.35;
+  } else if (pose === 'jumpkick') {
+    // flying kick: lead leg thrust straight, rear leg folded under
+    const fx = hipX + facing * 26 * s, fy = hipY + 6 * s;
+    seg2(hipX, hipY, hipX + facing * 13 * s, hipY + 3 * s, fx, fy);
+    fist(fx, fy, s * 1.1, col);
+    seg2(hipX, hipY, hipX - facing * 3 * s, hipY + 9 * s, hipX - facing * 11 * s, hipY + 5 * s);
+  } else if (pose === 'jump') {
+    // knees tucked
+    seg2(hipX, hipY, hipX + facing * 6 * s, hipY + 9 * s, hipX - facing * 2 * s, hipY + 16 * s);
+    seg2(hipX, hipY, hipX + facing * 9 * s, hipY + 11 * s, hipX + facing * 3 * s, hipY + 19 * s);
   } else if (run > 0.3) {
     const a = Math.sin(ph), b2 = Math.sin(ph + Math.PI);
-    drawLimb(hipX, hipY, x + a * 11 * s, y - Math.max(0, -a) * 7 * s, facing * 5 * s);
-    drawLimb(hipX, hipY, x + b2 * 11 * s, y - Math.max(0, -b2) * 7 * s, facing * 5 * s);
+    // knee-lift running gait
+    seg2(hipX, hipY, hipX + (a * 7 + facing * 3) * s, hipY + 13 * s, x + a * 12 * s, y - Math.max(0, -a) * 9 * s);
+    seg2(hipX, hipY, hipX + (b2 * 7 + facing * 3) * s, hipY + 13 * s, x + b2 * 12 * s, y - Math.max(0, -b2) * 9 * s);
   } else {
-    drawLimb(hipX, hipY, x - 6 * s, y, facing * 3 * s);
-    drawLimb(hipX, hipY, x + 6 * s, y, -facing * 3 * s);
+    // fighting stance: front foot forward, knees soft
+    seg2(hipX, hipY, hipX + facing * 6 * s, hipY + 14 * s, x + facing * 9 * s, y);
+    seg2(hipX, hipY, hipX - facing * 3 * s, hipY + 14 * s, x - facing * 7 * s, y);
   }
-  // arms
-  if (o.pose === 'punch' || o.pose === 'attack') {
-    const t = o.t || 0;
-    const ext = Math.sin(Math.min(1, t) * Math.PI);
-    drawLimb(shX, shY, shX + facing * (8 + 20 * ext) * s, shY + 2 * s, -facing * 3 * s);
-    drawLimb(shX, shY, shX - facing * 7 * s, shY + 10 * s, facing * 4 * s);
-  } else if (o.pose === 'cast') {
-    drawLimb(shX, shY, shX - 8 * s, shY - 16 * s, -4 * s);
-    drawLimb(shX, shY, shX + 8 * s, shY - 16 * s, 4 * s);
-  } else if (o.pose === 'hurt') {
-    drawLimb(shX, shY, shX - facing * 12 * s, shY - 4 * s, 5 * s);
-    drawLimb(shX, shY, shX + facing * 10 * s, shY - 2 * s, -5 * s);
+
+  /* ---- arms ---- */
+  const weaponHand = (hxp, hyp, ang) => { if (o.weapon) drawWeapon(o.weapon, hxp, hyp, facing > 0 ? ang : Math.PI - ang, s, col); };
+  if (pose === 'punch' || pose === 'stab') {
+    // straight lead punch with rear guard at the chin
+    const fx = shX + facing * (9 + 22 * ext) * s, fy = shY + 1 * s;
+    seg2(shX, shY, shX + facing * (5 + 11 * ext) * s, shY + (4 - 3 * ext) * s, fx, fy);
+    fist(fx, fy, s, col);
+    if (pose === 'stab') weaponHand(fx, fy, 0);
+    // speed lines
+    if (ext > 0.55) {
+      g.globalAlpha *= 0.4;
+      g.beginPath(); g.moveTo(fx - facing * 14 * s, fy - 3 * s); g.lineTo(fx - facing * 4 * s, fy - 3 * s); g.stroke();
+      g.beginPath(); g.moveTo(fx - facing * 14 * s, fy + 3 * s); g.lineTo(fx - facing * 4 * s, fy + 3 * s); g.stroke();
+      g.globalAlpha /= 0.4;
+    }
+    const gx = shX + facing * 5 * s, gy = shY - 1 * s;
+    seg2(shX, shY, shX - facing * 1 * s, shY + 8 * s, gx, gy);
+    fist(gx, gy, s, col);
+  } else if (pose === 'punch2') {
+    // both fists driving forward
+    const f1x = shX + facing * (10 + 21 * ext) * s, f1y = shY - 1 * s;
+    const f2x = shX + facing * (6 + 15 * (1 - ext * 0.5)) * s, f2y = shY + 5 * s;
+    seg2(shX, shY, shX + facing * 6 * s, shY + 2 * s, f1x, f1y);
+    seg2(shX, shY, shX + facing * 3 * s, shY + 8 * s, f2x, f2y);
+    fist(f1x, f1y, s, col); fist(f2x, f2y, s, col);
+  } else if (pose === 'slash') {
+    // overhead arc swing
+    const ang = lerp(-2.0, 0.55, ext);
+    const ax2 = Math.cos(ang), ay2 = Math.sin(ang);
+    const hx2 = shX + facing * ax2 * 17 * s, hy2 = shY + ay2 * 17 * s;
+    seg2(shX, shY, shX + facing * ax2 * 9 * s, shY + ay2 * 9 * s - 2 * s, hx2, hy2);
+    fist(hx2, hy2, s, col);
+    weaponHand(hx2, hy2, ang);
+    // swing trail
+    g.globalAlpha *= 0.3;
+    g.beginPath();
+    g.arc(shX, shY, 24 * s, facing > 0 ? ang - 1.1 : Math.PI - ang, facing > 0 ? ang : Math.PI - ang + 1.1);
+    g.stroke();
+    g.globalAlpha /= 0.3;
+    const gx = shX - facing * 4 * s, gy = shY + 7 * s;
+    seg2(shX, shY, shX - facing * 2 * s, shY + 5 * s, gx, gy);
+  } else if (pose === 'shoot') {
+    // two-hand firing stance, slight recoil
+    const rec = (1 - ext) * 3 * s;
+    const hx2 = shX + facing * (17 * s - rec), hy2 = shY + 3 * s;
+    seg2(shX, shY, shX + facing * 9 * s, shY + 5 * s, hx2, hy2);
+    seg2(shX, shY, shX + facing * 7 * s, shY + 7 * s, hx2 - facing * 3 * s, hy2 + 1 * s);
+    weaponHand(hx2, hy2, 0);
+  } else if (pose === 'cast') {
+    seg2(shX, shY, shX - 7 * s, shY - 8 * s, shX - 9 * s, shY - 17 * s);
+    seg2(shX, shY, shX + 7 * s, shY - 8 * s, shX + 9 * s, shY - 17 * s);
+  } else if (pose === 'hurt') {
+    seg2(shX, shY, shX - facing * 8 * s, shY + 2 * s, shX - facing * 13 * s, shY - 5 * s);
+    seg2(shX, shY, shX + facing * 7 * s, shY + 1 * s, shX + facing * 11 * s, shY - 3 * s);
+  } else if (pose === 'panic') {
+    // arms flailing overhead
+    const wig = Math.sin(time * 22) * 3 * s;
+    seg2(shX, shY, shX - 6 * s, shY - 9 * s, shX - 8 * s + wig, shY - 18 * s);
+    seg2(shX, shY, shX + 6 * s, shY - 9 * s, shX + 8 * s - wig, shY - 18 * s);
+  } else if (pose === 'jumpkick' || pose === 'kick' || pose === 'kick2') {
+    // guard arms while kicking
+    const gx = shX + facing * 8 * s, gy = shY - 2 * s;
+    seg2(shX, shY, shX + facing * 4 * s, shY + 6 * s, gx, gy);
+    fist(gx, gy, s, col);
+    seg2(shX, shY, shX - facing * 5 * s, shY + 6 * s, shX - facing * 2 * s, shY - 1 * s);
+  } else if (pose === 'jump') {
+    seg2(shX, shY, shX - facing * 6 * s, shY + 4 * s, shX - facing * 9 * s, shY - 6 * s);
+    seg2(shX, shY, shX + facing * 7 * s, shY + 4 * s, shX + facing * 10 * s, shY - 4 * s);
   } else if (run > 0.3) {
     const a = Math.sin(ph + Math.PI), b2 = Math.sin(ph);
-    drawLimb(shX, shY, shX + a * 9 * s, shY + 12 * s, facing * 4 * s);
-    drawLimb(shX, shY, shX + b2 * 9 * s, shY + 12 * s, facing * 4 * s);
+    seg2(shX, shY, shX + (a * 5 + facing * 3) * s, shY + 7 * s, shX + a * 10 * s, shY + 11 * s);
+    seg2(shX, shY, shX + (b2 * 5 + facing * 3) * s, shY + 7 * s, shX + b2 * 10 * s, shY + 11 * s);
+    if (o.weapon) weaponHand(shX + b2 * 10 * s, shY + 11 * s, -0.5);
   } else {
-    drawLimb(shX, shY, shX - 5 * s, shY + 15 * s, facing * 3 * s);
-    drawLimb(shX, shY, shX + 5 * s, shY + 15 * s, -facing * 3 * s);
+    // kung-fu guard: lead fist forward at chin height, rear fist close
+    const f1x = shX + facing * 13 * s, f1y = shY - 1 * s + bob * 0.5;
+    const f2x = shX + facing * 5 * s, f2y = shY + 3 * s;
+    seg2(shX, shY, shX + facing * 7 * s, shY + 7 * s, f1x, f1y);
+    seg2(shX, shY, shX - facing * 1 * s, shY + 9 * s, f2x, f2y);
+    fist(f1x, f1y, s, col); fist(f2x, f2y, s, col);
+    if (o.weapon) weaponHand(f1x, f1y, -0.6);
   }
 }
 
@@ -1013,7 +1471,6 @@ function drawBackground() {
   grad.addColorStop(0, z.sky[0]); grad.addColorStop(1, z.sky[1]);
   g.fillStyle = grad; g.fillRect(0, 0, W, H);
 
-  // zone silhouettes (deterministic per zone)
   g.fillStyle = 'rgba(0,0,0,0.35)';
   const zi = zoneIdx(level);
   let seed = zi * 999 + 7;
@@ -1031,11 +1488,10 @@ function drawBackground() {
       g.fillRect(bx, GROUND - 36 - srand() * 50, 60, 14);
     } else if (z.sil === 'dunes') {
       g.beginPath(); g.ellipse(bx, GROUND, 80, 24 + srand() * 30, 0, Math.PI, TAU); g.fill();
-    } else { // void
+    } else {
       g.beginPath(); g.arc(bx, 80 + srand() * 280, 1 + srand() * 2.5, 0, TAU); g.fill();
     }
   }
-  // ground
   g.fillStyle = z.ground;
   g.fillRect(0, GROUND, W, H - GROUND);
   g.strokeStyle = z.accent; g.globalAlpha = 0.5; g.lineWidth = 2;
@@ -1048,6 +1504,18 @@ function drawDecals() {
     g.globalAlpha = d.a;
     g.fillStyle = d.col;
     g.beginPath(); g.ellipse(d.x, d.y, d.r, d.r * 0.35, 0, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+function drawCorpses() {
+  for (const c of corpses) {
+    g.save();
+    g.translate(c.x, c.y);
+    g.rotate(c.rot);
+    g.globalAlpha = c.t > 4 ? clamp(5 - c.t, 0, 1) : 1;
+    drawStick(0, 0, c.scale, c.col, c.facing, { pose: 'hurt', noHead: c.noHead, lw: 3.5 });
+    g.restore();
   }
   g.globalAlpha = 1;
 }
@@ -1086,14 +1554,18 @@ function drawParticles() {
 function drawProjs() {
   for (const p of projs) {
     g.fillStyle = p.col;
-    g.shadowColor = p.col; g.shadowBlur = 10;
-    g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
-    if (p.meteor) {
-      g.globalAlpha = 0.4;
-      g.beginPath(); g.arc(p.x - p.vx * 3, p.y - p.vy * 3, p.r * 0.7, 0, TAU); g.fill();
-      g.globalAlpha = 1;
+    if (p.gun) {
+      // bullet tracer
+      g.strokeStyle = p.col; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(p.x - p.vx * 1.5, p.y - p.vy * 1.5); g.lineTo(p.x, p.y); g.stroke();
+    } else {
+      g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+      if (p.meteor || p.grenade) {
+        g.globalAlpha = 0.4;
+        g.beginPath(); g.arc(p.x - p.vx * 3, p.y - p.vy * 3, p.r * 0.7, 0, TAU); g.fill();
+        g.globalAlpha = 1;
+      }
     }
-    g.shadowBlur = 0;
   }
 }
 
@@ -1118,6 +1590,13 @@ function drawEffects() {
       g.fillRect(Math.min(e.x, x2), e.y - 9 * (1 - k), Math.abs(x2 - e.x), 18 * (1 - k));
       g.fillStyle = '#fff';
       g.fillRect(Math.min(e.x, x2), e.y - 3 * (1 - k), Math.abs(x2 - e.x), 6 * (1 - k));
+    } else if (e.type === 'pbeam') {
+      g.globalAlpha = 1 - k;
+      const x2 = e.dir > 0 ? W : 0;
+      g.fillStyle = '#3df';
+      g.fillRect(Math.min(e.x, x2), e.y - 5 * (1 - k), Math.abs(x2 - e.x), 10 * (1 - k));
+      g.fillStyle = '#fff';
+      g.fillRect(Math.min(e.x, x2), e.y - 2 * (1 - k), Math.abs(x2 - e.x), 4 * (1 - k));
     } else if (e.type === 'bolt') {
       g.globalAlpha = 1 - k;
       g.strokeStyle = '#aef'; g.lineWidth = 3;
@@ -1141,29 +1620,30 @@ function drawEffects() {
 }
 
 function poseOf(ent, isPlayer) {
-  if (ent.hurtT > 0) return { pose: 'hurt' };
   if (isPlayer) {
-    if (P.spinT > 0) return { pose: 'attack', t: (P.spinT * 8) % 1 };
+    if (ent.hurtT > 0) return { pose: 'hurt' };
+    if (P.spinT > 0) return { pose: 'slash', t: (P.spinT * 8) % 1 };
     if (P.castT > 0) return { pose: 'cast' };
-    if (P.atkT > 0) return { pose: P.atkType === 'kick' ? 'kick' : 'punch', t: 1 - P.atkT / (P.atkType === 'kick' ? 0.26 : 0.18) };
+    if (P.atkT > 0) return { pose: P.atkPose || 'punch', t: 1 - P.atkT / P.atkDur };
     if (!P.onGround) return { pose: 'jump' };
-    return {};
+    return { pose: 'guard' };
   }
+  if (ent.fleeT > 0) return { pose: 'panic' };
+  if (ent.hurtT > 0) return { pose: 'hurt' };
   if (ent.atkT > 0) return { pose: 'punch', t: 1 - ent.atkT / 0.25 };
   if (!ent.onGround) return { pose: 'jump' };
-  return {};
+  return { pose: 'guard' };
 }
 
 function drawEntities() {
   for (const e of enemies) {
     if (e.dead) continue;
     const o = poseOf(e, false);
-    o.run = Math.abs(e.vx) / 2; o.legPh = e.legPh;
-    o.eyes = '#f33';
+    o.run = Math.abs(e.vx) / 2; o.legPh = e.legPh; o.time = levelT + e.t;
+    o.eyes = e.fleeT > 0 ? '#fff' : '#f33';
     if (e.hurtT > 0) { g.globalAlpha = 0.7; }
     drawStick(e.x, e.y, e.scale, e.hurtT > 0 ? '#fff' : e.col, e.facing, o);
     g.globalAlpha = 1;
-    // small hp bar
     if (e.hp < e.maxhp) {
       g.fillStyle = '#300'; g.fillRect(e.x - 16, e.y - 62 * e.scale, 32, 4);
       g.fillStyle = '#e22'; g.fillRect(e.x - 16, e.y - 62 * e.scale, 32 * clamp(e.hp / e.maxhp, 0, 1), 4);
@@ -1180,10 +1660,10 @@ function drawEntities() {
 
   if (boss && boss.visible) {
     const o = poseOf(boss, false);
-    o.run = Math.abs(boss.vx) / 2; o.legPh = boss.legPh; o.lw = 4.2;
+    o.run = Math.abs(boss.vx) / 2; o.legPh = boss.legPh; o.lw = 4.2; o.time = levelT;
     o.eyes = boss.enraged ? '#ff2222' : '#ffe14d';
     if (boss.state === 'tele') { g.globalAlpha = 0.6 + 0.4 * Math.sin(levelT * 30); }
-    if (boss.state === 'spin') { o.pose = 'attack'; o.t = (levelT * 6) % 1; }
+    if (boss.state === 'spin') { o.pose = 'slash'; o.t = (levelT * 6) % 1; }
     if (boss.state === 'laser' && !boss.fired) {
       g.strokeStyle = '#f33'; g.globalAlpha = 0.5; g.lineWidth = 2;
       g.setLineDash([8, 8]);
@@ -1197,8 +1677,10 @@ function drawEntities() {
 
   if (P && !P.dead) {
     const o = poseOf(P, true);
-    o.run = Math.abs(P.vx) / 2.2; o.legPh = P.legPh;
+    o.run = Math.abs(P.vx) / 2.2; o.legPh = P.legPh; o.time = levelT;
     o.eyes = '#3df';
+    const w = P.weapons[P.wIdx];
+    if (w && w.id !== 'fists') o.weapon = w.id;
     if (P.inv > 0 && Math.sin(levelT * 40) > 0) g.globalAlpha = 0.45;
     drawStick(P.x, P.y, 1.05, '#ffffff', P.facing, o);
     g.globalAlpha = 1;
@@ -1230,11 +1712,15 @@ function drawHUD() {
   const s = P.stats;
   bar(16, 14, 220, 18, P.hp / s.maxhp, '#d61f1f', '#3a0a0a', 'HP ' + Math.ceil(Math.max(0, P.hp)));
   bar(16, 36, 180, 12, P.energy / s.energyMax, '#f0c428', '#3a3008', '');
+  // weapon readout
+  const w = P.weapons[P.wIdx];
+  g.font = 'bold 12px Courier New'; g.textAlign = 'left';
+  g.fillStyle = '#7ec8ff';
+  g.fillText('[Q/E] ' + (P.wIdx + 1) + '/' + P.weapons.length + ' — ' + w.name, 16, 62);
   if (s.special) {
     const sp = SPECIALS[s.special];
-    g.font = 'bold 11px Courier New'; g.textAlign = 'left';
     g.fillStyle = P.energy >= sp.cost || bonusMode ? '#ffe14d' : '#776';
-    g.fillText('[L] ' + sp.label + (bonusMode ? ' (FREE!)' : ''), 16, 62);
+    g.fillText('[L] ' + sp.label + (bonusMode ? ' (FREE!)' : ''), 16, 78);
   }
   g.font = 'bold 13px Courier New'; g.textAlign = 'right';
   g.fillStyle = '#fff';
@@ -1253,14 +1739,12 @@ function drawHUD() {
     g.fillStyle = '#ff5fd0';
     g.fillText('☠ BLOOD FRENZY: +50% DMG · FREE SPECIALS ☠', W / 2, 26);
   }
-  // boss bar
   if (boss) {
     bar(W / 2 - 220, H - 36, 440, 16, boss.hp / boss.maxhp, boss.enraged ? '#ff2222' : '#c41f7a', '#2a0515', '');
     g.font = 'bold 13px Courier New'; g.textAlign = 'center';
     g.fillStyle = '#fff';
     g.fillText(boss.name + (boss.enraged ? '  [ENRAGED]' : ''), W / 2, H - 42);
   }
-  // banner
   if (banner > 0) {
     g.globalAlpha = clamp(banner, 0, 1);
     g.font = 'bold 36px Courier New'; g.textAlign = 'center';
@@ -1291,7 +1775,6 @@ function button(x, y, w, h, label, hot) {
 function drawMenu(dt) {
   menuPulse += dt;
   g.fillStyle = '#0a0a0c'; g.fillRect(0, 0, W, H);
-  // dripping blood title backdrop
   g.fillStyle = '#3a0505';
   for (let i = 0; i < 12; i++) {
     const x = 80 + i * 75;
@@ -1299,13 +1782,18 @@ function drawMenu(dt) {
     g.beginPath(); g.arc(x + 8, 60 + Math.sin(menuPulse * 0.7 + i * 1.7) * 30 + i % 3 * 25, 8, 0, TAU); g.fill();
   }
   g.font = 'bold 64px Courier New'; g.textAlign = 'center';
-  g.fillStyle = '#000'; g.fillText('STICK CARNAGE', W / 2 + 4, 154);
-  g.fillStyle = '#d61f1f'; g.fillText('STICK CARNAGE', W / 2, 150);
+  g.fillStyle = '#000'; g.fillText('STICK CARNAGE', W / 2 + 4, 144);
+  g.fillStyle = '#d61f1f'; g.fillText('STICK CARNAGE', W / 2, 140);
   g.font = 'bold 16px Courier New';
   g.fillStyle = '#888';
-  g.fillText('40 LEVELS · 10 BONUS ARENAS · 50 BOSSES · 50 POWERS · MAXIMUM GORE', W / 2, 185);
+  g.fillText('40 LEVELS · 10 BONUS ARENAS · 50 BOSSES · 50 POWERS · 16 WEAPONS', W / 2, 172);
 
-  // decorative fighters
+  // 18+ adults-only badge
+  g.fillStyle = '#5a0d0d'; g.fillRect(W / 2 - 165, 184, 330, 26);
+  g.strokeStyle = '#ff2222'; g.lineWidth = 2; g.strokeRect(W / 2 - 165, 184, 330, 26);
+  g.font = 'bold 14px Courier New'; g.fillStyle = '#ff5555';
+  g.fillText('18+ EXTREME VIOLENCE · ADULTS ONLY', W / 2, 202);
+
   drawStick(W / 2 - 200, 360, 1.4, '#fff', 1, { pose: 'kick', t: 0.5 + Math.sin(menuPulse * 3) * 0.3 });
   drawStick(W / 2 + 200, 360, 1.4, '#d8d8d8', -1, { pose: 'hurt' });
   g.fillStyle = '#c40f0f';
@@ -1314,26 +1802,25 @@ function drawMenu(dt) {
     g.arc(W / 2 + 160 - i * 12, 320 + Math.sin(menuPulse * 5 + i) * 6, 3, 0, TAU); g.fill();
   }
 
-  const contLabel = save.unlocked > 1 ? 'CONTINUE (LEVEL ' + Math.min(50, save.unlocked) + ')' : 'START CARNAGE';
-  if (button(W / 2 - 150, 250, 300, 44, contLabel) || tap('Enter')) {
-    sfx('select'); startLevel(Math.min(50, save.unlocked));
+  if (button(W / 2 - 150, 240, 300, 44, 'START CARNAGE') || tap('Enter')) {
+    sfx('select'); startLevel(1);
   }
-  if (button(W / 2 - 150, 304, 300, 40, 'LEVEL SELECT')) { sfx('select'); selCursor = Math.min(save.unlocked, 50); state = 'select'; }
+  if (button(W / 2 - 150, 294, 300, 40, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
 
   g.font = '13px Courier New'; g.fillStyle = '#777'; g.textAlign = 'center';
-  g.fillText('A/D or ←→ move · W/SPACE jump · J punch · K kick · L special · SHIFT dash · P pause · M mute', W / 2, 460);
-  g.fillText('Win a level → unlock a new power. Every level ends with a BOSS.', W / 2, 480);
-  if (save.unlocked > 1) {
-    g.fillStyle = '#544';
-    g.fillText('(progress saved — ' + (save.unlocked - 1) + '/50 levels beaten)', W / 2, 500);
-  }
+  g.fillText('A/D move · W/SPACE jump · J attack (double-tap = double hit) · K kick (double-tap = double kick)', W / 2, 448);
+  g.fillText('Q/E switch weapon · L special · SHIFT dash · jump+K = flying kick · P pause · M mute', W / 2, 466);
+  g.fillStyle = '#f0c428';
+  g.fillText('TESTING BUILD — ALL 50 LEVELS UNLOCKED IN LEVEL SELECT', W / 2, 492);
 }
 
 function drawSelect() {
   g.fillStyle = '#0a0a0c'; g.fillRect(0, 0, W, H);
   g.font = 'bold 30px Courier New'; g.textAlign = 'center';
   g.fillStyle = '#d61f1f'; g.fillText('CHOOSE YOUR SLAUGHTER', W / 2, 56);
-  const cw = 76, ch = 60, ox = (W - cw * 10) / 2 + cw / 2, oy = 110;
+  g.font = 'bold 12px Courier New'; g.fillStyle = '#f0c428';
+  g.fillText('TESTING BUILD: every level unlocked', W / 2, 78);
+  const cw = 76, ch = 56, ox = (W - cw * 10) / 2 + cw / 2, oy = 100;
   for (let n = 1; n <= 50; n++) {
     const col = (n - 1) % 10, row = Math.floor((n - 1) / 10);
     const x = ox + col * cw - 30, y = oy + row * (ch + 12);
@@ -1344,34 +1831,33 @@ function drawSelect() {
     if (over && !locked) g.fillStyle = '#5a0d0d';
     g.fillRect(x, y, 60, ch);
     g.strokeStyle = locked ? '#333' : bonus ? '#f0c428' : n === 50 ? '#ff2266' : zoneOf(n).accent;
-    g.lineWidth = n === selCursor ? 3 : 1.5;
+    g.lineWidth = 1.5;
     g.strokeRect(x, y, 60, ch);
     g.font = 'bold 18px Courier New';
     g.fillStyle = locked ? '#444' : '#fff';
-    g.fillText(locked ? '✖' : String(n), x + 30, y + 28);
+    g.fillText(locked ? '✖' : String(n), x + 30, y + 26);
     g.font = 'bold 9px Courier New';
     g.fillStyle = locked ? '#333' : bonus ? '#f0c428' : '#888';
-    g.fillText(n === 50 ? 'FINAL' : bonus ? 'BONUS' : 'BOSS', x + 30, y + 46);
+    g.fillText(n === 50 ? 'FINAL' : bonus ? 'BONUS' : 'BOSS', x + 30, y + 44);
     if (over && mclick && !locked) { sfx('select'); startLevel(n); return; }
   }
   g.font = '13px Courier New'; g.fillStyle = '#777';
-  g.fillText('Click a level — gold = bonus blood arenas · ESC/B to go back', W / 2, H - 18);
+  g.fillText('Click a level — gold = bonus blood arenas · ESC/B to go back', W / 2, H - 14);
   if (tap('Escape') || tap('b')) { state = 'menu'; }
 }
 
 function drawPowerup(dt) {
   stateTimer += dt;
-  drawBackground(); drawDecals(); drawGibs();
+  drawBackground(); drawDecals(); drawCorpses(); drawGibs();
   g.fillStyle = 'rgba(0,0,0,0.78)'; g.fillRect(0, 0, W, H);
   const pw = POWERS[level - 1];
   g.font = 'bold 34px Courier New'; g.textAlign = 'center';
   g.fillStyle = '#7bff4d';
-  g.fillText((bonusMode ? 'BONUS ARENA' : 'LEVEL ' + level) + ' CLEARED', W / 2, 120);
+  g.fillText((bonusMode ? 'BONUS ARENA' : 'LEVEL ' + level) + ' CLEARED', W / 2, 110);
   g.font = 'bold 15px Courier New'; g.fillStyle = '#aaa';
-  g.fillText(BOSS_NAMES[level - 1] + ' has been reduced to a red smear. Kills: ' + kills, W / 2, 150);
+  g.fillText(BOSS_NAMES[level - 1] + ' has been reduced to a red smear. Kills: ' + kills, W / 2, 140);
 
-  // power card
-  const cy = 200, chh = 150;
+  const cy = 180, chh = 150;
   const pulse = 1 + Math.sin(stateTimer * 4) * 0.02;
   g.save();
   g.translate(W / 2, cy + chh / 2); g.scale(pulse, pulse); g.translate(-W / 2, -(cy + chh / 2));
@@ -1387,20 +1873,26 @@ function drawPowerup(dt) {
   g.fillText('power ' + level + ' / 50', W / 2, cy + 130);
   g.restore();
 
+  const nw = WEAPONS.find(x => x.lvl === level + 1);
+  if (nw) {
+    g.font = 'bold 15px Courier New'; g.fillStyle = '#7ec8ff';
+    g.fillText('NEXT LEVEL UNLOCKS WEAPON: ' + nw.name, W / 2, 366);
+  }
+
   if (level >= 50) {
     if (button(W / 2 - 150, 400, 300, 46, 'CLAIM YOUR THRONE') || tap('Enter')) { state = 'victory'; stateTimer = 0; }
   } else {
     const nb = isBonusLevel(level + 1);
-    if (button(W / 2 - 150, 400, 300, 46, nb ? 'ENTER BONUS ARENA ' + (level + 1) : 'NEXT: LEVEL ' + (level + 1)) || tap('Enter')) {
+    if (button(W / 2 - 150, 390, 300, 46, nb ? 'ENTER BONUS ARENA ' + (level + 1) : 'NEXT: LEVEL ' + (level + 1)) || tap('Enter')) {
       sfx('select'); startLevel(level + 1);
     }
-    if (button(W / 2 - 150, 456, 300, 34, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
+    if (button(W / 2 - 150, 446, 300, 34, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
   }
 }
 
 function drawGameover(dt) {
   stateTimer += dt;
-  drawBackground(); drawDecals(); drawGibs(); drawParticles();
+  drawBackground(); drawDecals(); drawCorpses(); drawGibs(); drawParticles();
   g.fillStyle = 'rgba(20,0,0,0.7)'; g.fillRect(0, 0, W, H);
   g.font = 'bold 56px Courier New'; g.textAlign = 'center';
   g.fillStyle = '#000'; g.fillText('YOU DIED', W / 2 + 3, 203);
@@ -1430,7 +1922,7 @@ function drawVictory(dt) {
   g.fillText('CARNAGE COMPLETE', W / 2, 170);
   g.font = 'bold 20px Courier New'; g.fillStyle = '#fff';
   g.fillText('DEATH INCARNATE lies in pieces. All 50 levels conquered.', W / 2, 220);
-  g.fillText('All 50 powers are yours. You ARE the apocalypse.', W / 2, 250);
+  g.fillText('All 50 powers and 16 weapons are yours. You ARE the apocalypse.', W / 2, 250);
   drawStick(W / 2, 380, 2, '#fff', 1, { pose: 'cast', eyes: '#ffe14d' });
   if (button(W / 2 - 150, 430, 300, 40, 'BACK TO MENU')) { sfx('select'); state = 'menu'; }
 }
@@ -1450,13 +1942,16 @@ function drawPause() {
 let last = 0;
 function frame(ts) {
   requestAnimationFrame(frame);
-  let dt = Math.min(0.033, (ts - last) / 1000 || 0.016);
+  const rawDt = Math.min(0.033, (ts - last) / 1000 || 0.016);
+  let dt = rawDt;
   last = ts;
+  nowT += rawDt;
   if (tap('m')) muted = !muted;
 
-  if (hitstop > 0) { hitstop -= dt; dt *= 0.05; }
-  shake = Math.max(0, shake - 40 * dt * (shake * 0.1 + 1));
-  flash = Math.max(0, flash - dt * 1.5);
+  if (hitstop > 0) { hitstop -= rawDt; dt *= 0.05; }
+  else if (slowmo > 0) { slowmo -= rawDt; dt *= 0.35; } // kill-cam slow motion
+  shake = Math.max(0, shake - 40 * rawDt * (shake * 0.1 + 1));
+  flash = Math.max(0, flash - rawDt * 1.5);
 
   g.save();
   if (shake > 0.3 && (state === 'play' || state === 'pause')) {
@@ -1464,23 +1959,28 @@ function frame(ts) {
   }
 
   switch (state) {
-    case 'menu': drawMenu(dt); break;
+    case 'menu': drawMenu(rawDt); break;
     case 'select': drawSelect(); break;
     case 'play':
       updatePlay(dt);
       updateParticles(dt);
-      drawBackground(); drawDecals(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
+      drawBackground(); drawDecals(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
       break;
     case 'pause':
-      drawBackground(); drawDecals(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
+      drawBackground(); drawDecals(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
       drawPause();
       break;
-    case 'powerup': updateParticles(dt); drawPowerup(dt); break;
-    case 'gameover': updateParticles(dt); drawGameover(dt); break;
-    case 'victory': drawVictory(dt); break;
+    case 'powerup': updateParticles(dt); updateCorpses(dt); drawPowerup(rawDt); break;
+    case 'gameover': updateParticles(dt); updateCorpses(dt); drawGameover(rawDt); break;
+    case 'victory': drawVictory(rawDt); break;
   }
 
   g.restore();
+  if (slowmo > 0 && state === 'play') {
+    // cinematic letterbox during kill-cam
+    g.fillStyle = 'rgba(0,0,0,0.85)';
+    g.fillRect(0, 0, W, 26); g.fillRect(0, H - 26, W, 26);
+  }
   if (flash > 0) {
     g.globalAlpha = flash;
     g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
