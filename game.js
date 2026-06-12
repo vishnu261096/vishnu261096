@@ -230,6 +230,7 @@ let state = 'menu';
 let level = 1, wave = 0, totalWaves = 0, kills = 0, levelT = 0, banner = 0, nowT = 0;
 let bossSpawned = false, bonusMode = false;
 let streak = 0, streakT = 0;
+let lives = 3; // 3 lives per run; +1 every 5th boss; death = restore on the spot
 let menuPulse = 0;
 
 /* ---------------- blood & gore ---------------- */
@@ -424,9 +425,12 @@ function levelClear() {
   state = 'powerup';
   stateTimer = 0;
   banner = 0;
+  earnedLife = level % 5 === 0; // every 5th boss grants an extra life
+  if (earnedLife) lives = Math.min(9, lives + 1);
   if (level >= save.unlocked && !TESTING) { save.unlocked = Math.min(50, level + 1); persist(); }
   sfx('power');
 }
+let earnedLife = false;
 
 /* ---------------- enemies ---------------- */
 const ETYPES = ['grunt', 'runner', 'brute', 'ninja', 'gunner', 'bomber', 'mage', 'shield'];
@@ -434,16 +438,18 @@ const ECOL = { grunt: '#d8d8d8', runner: '#7ec8ff', brute: '#c98a4b', ninja: '#9
 
 function makeEnemy(type, x) {
   const n = level;
+  const skill = zoneIdx(n); // fighters get sharper every zone
   const base = { grunt: 1, runner: 0.7, brute: 2.6, ninja: 0.9, gunner: 0.8, bomber: 0.6, mage: 1, shield: 1.8 }[type];
   return {
     type, x, y: GROUND, vx: 0, vy: 0, facing: -1, onGround: true,
     hp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
     maxhp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
     dmg: (5 + n * 0.38) * (type === 'brute' ? 1.6 : 1),
-    speed: { grunt: 1.6, runner: 3.4, brute: 1.1, ninja: 2.4, gunner: 1.4, bomber: 3.0, mage: 1.0, shield: 1.2 }[type] + n * 0.02,
+    speed: { grunt: 1.6, runner: 3.4, brute: 1.1, ninja: 2.4, gunner: 1.4, bomber: 3.0, mage: 1.0, shield: 1.2 }[type] + n * 0.02 + skill * 0.12,
     cd: rnd(0.5, 1.4), col: ECOL[type], scale: type === 'brute' ? 1.35 : type === 'shield' ? 1.15 : 1,
     hurtT: 0, legPh: rnd(0, TAU), dead: false, jumpCd: rnd(0.5, 2), t: 0,
     fleeT: 0, screamT: 0, atkT: 0,
+    skill, dodgeCd: rnd(0, 1), burst: 0, slamCd: rnd(2, 4),
   };
 }
 
@@ -463,9 +469,19 @@ function spawnWave() {
 function updateEnemy(e, dt) {
   const f = dt * 60;
   e.t += dt;
-  e.cd -= dt; e.hurtT -= dt; e.jumpCd -= dt;
+  e.cd -= dt; e.hurtT -= dt; e.jumpCd -= dt; e.dodgeCd -= dt; e.slamCd -= dt;
   const dx = P.x - e.x, adx = Math.abs(dx);
   let want = 0;
+
+  // skilled fighters read your attacks and hop out of range
+  if (e.skill >= 2 && e.fleeT <= 0 && e.hurtT <= 0 && e.onGround && e.dodgeCd <= 0
+      && P.atkT > P.atkDur * 0.6 && adx < 90 && Math.random() < 0.06 + e.skill * 0.02) {
+    e.dodgeCd = rnd(1.2, 2.2);
+    e.vx = -Math.sign(dx || 1) * (7 + e.skill * 0.5);
+    e.vy = -5.5;
+    e.hurtT = -0.01;
+    floatText(e.x, e.y - 60, 'DODGE', '#9fd0ff', false);
+  }
 
   if (e.fleeT > 0) {
     // running scared from the slaughter
@@ -480,8 +496,15 @@ function updateEnemy(e, dt) {
       // staggered
     } else if (e.type === 'gunner') {
       if (adx < 200) want = -e.facing; else if (adx > 320) want = e.facing;
-      if (e.cd <= 0 && adx < 460) {
+      if (e.burst > 0 && e.cd <= 0) {
+        // veteran gunners rattle off 3-round bursts
+        e.burst--; e.cd = 0.12;
+        sfx('shoot');
+        const a = Math.atan2((P.y - 30) - (e.y - 32), dx) + rnd(-0.06, 0.06);
+        projs.push({ x: e.x + e.facing * 14, y: e.y - 32, vx: Math.cos(a) * 7, vy: Math.sin(a) * 7, r: 4, dmg: e.dmg * 0.8, from: 'enemy', col: '#aaff66', life: 3 });
+      } else if (e.cd <= 0 && adx < 460) {
         e.cd = 1.5 - Math.min(0.7, level * 0.012);
+        if (e.skill >= 4) { e.burst = 2; }
         sfx('shoot');
         const a = Math.atan2((P.y - 30) - (e.y - 32), dx);
         projs.push({ x: e.x + e.facing * 14, y: e.y - 32, vx: Math.cos(a) * 6.5, vy: Math.sin(a) * 6.5, r: 4, dmg: e.dmg, from: 'enemy', col: '#aaff66', life: 3 });
@@ -503,9 +526,27 @@ function updateEnemy(e, dt) {
       if (adx > 30) want = e.facing;
       if (e.type === 'ninja' && e.jumpCd <= 0 && e.onGround && adx < 260 && adx > 60) {
         e.vy = -11; e.vx = e.facing * 7; e.jumpCd = rnd(1.5, 3);
+        // master ninjas fling a shuriken mid-leap
+        if (e.skill >= 3) {
+          sfx('slice');
+          const a = Math.atan2((P.y - 30) - (e.y - 40), dx);
+          projs.push({ x: e.x, y: e.y - 40, vx: Math.cos(a) * 8, vy: Math.sin(a) * 8, r: 4, dmg: e.dmg * 0.9, from: 'enemy', col: '#cfd8ff', life: 2 });
+        }
+      }
+      // elite brutes leap and slam the ground
+      if (e.type === 'brute' && e.skill >= 5 && e.slamCd <= 0 && e.onGround && adx < 220 && adx > 70) {
+        e.slamCd = rnd(4, 6);
+        e.vy = -10; e.vx = e.facing * Math.min(8, adx / 24);
+        e.slamming = true;
+      }
+      if (e.slamming && e.onGround && e.vy === 0 && e.t > 0.2) {
+        e.slamming = false;
+        sfx('boom');
+        shake = Math.min(14, shake + 6);
+        effects.push({ type: 'shockwave', x: e.x, y: GROUND, t: 0, dur: 0.45, r: 0, maxR: 130, col: e.col, from: 'enemy', dmg: e.dmg * 1.2, hitSet: new Set() });
       }
       if (e.cd <= 0 && adx < 38 + (e.scale - 1) * 20 && Math.abs(P.y - e.y) < 60) {
-        e.cd = e.type === 'brute' ? 1.4 : 0.9;
+        e.cd = (e.type === 'brute' ? 1.4 : 0.9) - Math.min(0.4, e.skill * 0.05);
         e.atkT = 0.2;
         damagePlayer(e.dmg, e.facing * (e.type === 'brute' ? 7 : 3), e);
       }
@@ -555,7 +596,21 @@ function damagePlayer(d, kb, src) {
       P.secondWindUsed = true; P.hp = s.maxhp * 0.4; P.inv = 2;
       floatText(P.x, P.y - 80, 'SECOND WIND!', '#7bff4d', true);
       flash = 0.4;
+    } else if (lives > 1) {
+      // burn a life and restore right where you fell
+      lives--;
+      P.hp = s.maxhp; P.energy = s.energyMax; P.inv = 2.5; P.vx = 0;
+      flash = 0.6; slowmo = Math.max(slowmo, 0.7); shake = 18;
+      sfx('boss'); sfx('power');
+      blood(P.x, P.y - 25, 24, 0, 7);
+      floatText(P.x, P.y - 95, 'LIFE LOST!', '#ff3333', true);
+      floatText(P.x, P.y - 65, lives + (lives === 1 ? ' LIFE' : ' LIVES') + ' REMAINING', '#ffe14d', false);
+      // blast everything off you so you aren't killed again instantly
+      for (const e of enemies) if (Math.abs(e.x - P.x) < 160) { e.vx = Math.sign(e.x - P.x || 1) * 10; e.vy = -6; e.hurtT = 0.5; }
+      if (boss && Math.abs(boss.x - P.x) < 180) { boss.vx = Math.sign(boss.x - P.x || 1) * 6; }
+      effects.push({ type: 'shockwave', x: P.x, y: GROUND, t: 0, dur: 0.5, r: 0, maxR: 200, col: '#ffe14d', from: 'player', dmg: 0, hitSet: new Set() });
     } else {
+      lives = 0;
       P.dead = true;
       gibBurst(P.x, P.y, '#ffffff', 1, kb, 1.5);
       addDecal(P.x, 14);
@@ -567,21 +622,40 @@ function damagePlayer(d, kb, src) {
 }
 
 /* ---------------- boss ---------------- */
-const ARCHS = ['charger', 'slammer', 'gunner', 'summoner', 'teleporter', 'spinner', 'laser'];
+/* every zone fights a different kind of monster */
+const BOSS_LOOKS = ['warrior', 'mech', 'ogre', 'icetitan', 'dragon', 'seamonster', 'ghost', 'lion', 'devil', 'voidbeast'];
+const LOOK_LABEL = {
+  warrior: 'THE WARLORD', mech: 'WAR MACHINE', ogre: 'THE OGRE', icetitan: 'ICE TITAN',
+  dragon: 'THE DRAGON', seamonster: 'SEA MONSTER', ghost: 'THE GHOST', lion: 'BEAST KING',
+  devil: 'ARCH-DEVIL', voidbeast: 'VOID HORROR', death: 'DEATH ITSELF',
+};
+const LOOK_MOVES = {
+  warrior:    ['charge', 'charge', 'slam'],
+  mech:       ['shoot', 'shoot', 'laser'],
+  ogre:       ['slam', 'slam', 'charge'],
+  icetitan:   ['slam', 'shoot', 'charge'],
+  dragon:     ['shoot', 'laser', 'charge'],
+  seamonster: ['summon', 'slam', 'shoot'],
+  ghost:      ['vanish', 'vanish', 'shoot'],
+  lion:       ['charge', 'spin', 'slam'],
+  devil:      ['laser', 'shoot', 'summon', 'charge'],
+  voidbeast:  ['vanish', 'summon', 'laser', 'spin'],
+  death:      ['charge', 'slam', 'laser', 'summon', 'vanish', 'spin'],
+};
 function makeBoss() {
   const n = level;
   const zi = zoneIdx(n);
-  const arch = n === 50 ? 'final' : ARCHS[zi % ARCHS.length];
+  const look = n === 50 ? 'death' : BOSS_LOOKS[zi];
   const hpMul = n === 50 ? 1.8 : bonusMode ? 0.85 : 1;
   const z = zoneOf(n);
   sfx('boss');
   banner = 0;
   return {
-    isBoss: true, arch, name: BOSS_NAMES[n - 1],
+    isBoss: true, look, name: BOSS_NAMES[n - 1],
     x: W - 130, y: GROUND, vx: 0, vy: 0, facing: -1, onGround: true,
     hp: (130 + n * 42) * hpMul, maxhp: (130 + n * 42) * hpMul,
     dmg: 9 + n * 0.55, speed: 1.6 + n * 0.025,
-    scale: n === 50 ? 2.6 : 1.9 + zi * 0.05, col: z.accent,
+    scale: n === 50 ? 2.6 : 1.9 + zi * 0.05 + ((n - 1) % 5) * 0.06, col: z.accent,
     state: 'intro', t: 1.4, next: null, hurtT: 0, legPh: 0,
     enraged: false, dying: false, visible: true, atkT: 0,
     beamY: 0, armored: true, t2: 0, fleeT: 0,
@@ -589,18 +663,9 @@ function makeBoss() {
 }
 
 function bossChoose(b) {
-  const moves = {
-    charger:    ['charge', 'charge', 'slam'],
-    slammer:    ['slam', 'slam', 'charge'],
-    gunner:     ['shoot', 'shoot', 'charge'],
-    summoner:   ['summon', 'shoot', 'slam'],
-    teleporter: ['vanish', 'vanish', 'charge'],
-    spinner:    ['spin', 'charge', 'slam'],
-    laser:      ['laser', 'shoot', 'charge'],
-    final:      ['charge', 'slam', 'laser', 'summon', 'vanish', 'spin'],
-  }[b.arch];
+  const moves = LOOK_MOVES[b.look];
   b.next = pick(moves);
-  if (b.arch === 'summoner' && enemies.length > 5) b.next = 'shoot';
+  if (b.look === 'seamonster' && enemies.length > 5) b.next = 'shoot';
   if (b.next === 'summon' && enemies.length > 6) b.next = 'charge';
   b.state = 'tele';
   b.t = b.enraged ? 0.45 : 0.7;
@@ -638,7 +703,7 @@ function updateBoss(b, dt) {
         b.state = b.next;
         if (b.next === 'charge') { b.t = 0.85; b.chargeDir = Math.sign(P.x - b.x) || b.facing; b.facing = b.chargeDir; sfx('dash'); }
         if (b.next === 'slam')   { b.t = 1.0; b.vy = -13; b.vx = Math.sign(P.x - b.x) * Math.min(9, Math.abs(P.x - b.x) / 28); }
-        if (b.next === 'shoot')  { b.t = b.arch === 'final' ? 1.6 : 1.2; b.t2 = 0; }
+        if (b.next === 'shoot')  { b.t = b.look === 'death' ? 1.6 : 1.2; b.t2 = 0; }
         if (b.next === 'summon') { b.t = 0.6; b.didSummon = false; }
         if (b.next === 'vanish') { b.t = 0.7; b.visible = false; sfx('dash'); blood(b.x, b.y - 40, 8, 0, 3); }
         if (b.next === 'spin')   { b.t = 1.8; b.spinHit = 0; }
@@ -1164,8 +1229,9 @@ function updateParticles(dt) {
 }
 
 /* ---------------- level flow ---------------- */
-function startLevel(n) {
+function startLevel(n, keepLives) {
   level = n;
+  if (!keepLives) lives = 3;
   bonusMode = isBonusLevel(n);
   particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = []; corpses = [];
   boss = null; bossSpawned = false;
@@ -1199,7 +1265,8 @@ function updatePlay(dt) {
     else {
       bossSpawned = true;
       boss = makeBoss();
-      floatText(W / 2, 180, BOSS_NAMES[level - 1], '#ff3333', true);
+      floatText(W / 2, 170, BOSS_NAMES[level - 1], '#ff3333', true);
+      floatText(W / 2, 200, LOOK_LABEL[boss.look], '#ffe14d', true);
     }
   }
   if (tap('p') || tap('Escape')) { state = 'pause'; }
@@ -1619,6 +1686,296 @@ function drawEffects() {
   }
 }
 
+/* ---------------- boss monster bodies ----------------
+   every zone's boss is a different creature, drawn from scratch */
+function drawBoss(b) {
+  const s = b.scale, f = b.facing, t = levelT;
+  const col = b.hurtT > 0 ? '#ffffff' : b.col;
+  const eye = b.enraged ? '#ff2222' : '#ffe14d';
+  g.save();
+  g.translate(b.x, b.y);
+  if (b.state === 'charge') g.rotate((b.chargeDir || f) * 0.13);
+  if (b.state === 'spin') g.rotate(Math.sin(t * 18) * 0.35);
+  if (b.state === 'tele') g.globalAlpha = 0.55 + 0.45 * Math.sin(t * 30);
+  g.strokeStyle = col; g.fillStyle = col;
+  g.lineWidth = Math.max(3.5, 2.2 * s); g.lineCap = 'round'; g.lineJoin = 'round';
+  const E = (x, y, r) => { g.fillStyle = eye; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); g.fillStyle = col; };
+
+  switch (b.look) {
+    case 'warrior': {
+      // armored warlord: horned helm, spiked pauldrons, greatsword
+      drawStick(0, 0, s, col, f, { pose: b.atkT > 0 ? 'slash' : 'guard', t: b.atkT > 0 ? 1 - b.atkT / 0.25 : 0, run: Math.abs(b.vx) / 2, legPh: b.legPh, lw: 4.2 / s * s, eyes: eye, weapon: 'sword', time: t });
+      const hx = f * 2 * s, hy = -52 * s;
+      g.beginPath(); g.moveTo(hx - 5 * s, hy - 4 * s); g.lineTo(hx - 9 * s, hy - 12 * s); g.stroke();
+      g.beginPath(); g.moveTo(hx + 5 * s, hy - 4 * s); g.lineTo(hx + 9 * s, hy - 12 * s); g.stroke();
+      g.beginPath(); g.moveTo(-8 * s, -44 * s); g.lineTo(-13 * s, -52 * s); g.stroke();
+      g.beginPath(); g.moveTo(8 * s, -44 * s); g.lineTo(13 * s, -52 * s); g.stroke();
+      break;
+    }
+    case 'mech': {
+      // war machine: boxy chassis, glowing visor, piston legs, arm cannon
+      const bob2 = Math.sin(t * 4) * 1.5;
+      g.fillStyle = '#1c2230';
+      g.fillRect(-15 * s, -54 * s + bob2, 30 * s, 30 * s);
+      g.strokeRect(-15 * s, -54 * s + bob2, 30 * s, 30 * s);
+      g.fillRect(-9 * s, -66 * s + bob2, 18 * s, 12 * s);
+      g.strokeRect(-9 * s, -66 * s + bob2, 18 * s, 12 * s);
+      g.fillStyle = eye;
+      g.fillRect(-6 * s + f * 2 * s, -62 * s + bob2, 10 * s, 2.5 * s); // visor
+      g.fillStyle = col;
+      g.beginPath(); g.moveTo(0, -66 * s + bob2); g.lineTo(0, -74 * s + bob2); g.stroke();
+      g.beginPath(); g.arc(0, -75 * s + bob2, 1.6 * s, 0, TAU); g.fill();
+      // arm cannon points at you
+      g.beginPath(); g.moveTo(f * 14 * s, -46 * s + bob2); g.lineTo(f * 28 * s, -40 * s + bob2); g.stroke();
+      g.fillRect(f * 24 * s - 3 * s, -44 * s + bob2, 6 * s, 6 * s);
+      g.beginPath(); g.moveTo(-f * 14 * s, -46 * s + bob2); g.lineTo(-f * 22 * s, -32 * s + bob2); g.stroke();
+      // piston legs
+      seg2(-8 * s, -24 * s + bob2, -10 * s, -12 * s, -12 * s, 0);
+      seg2(8 * s, -24 * s + bob2, 10 * s, -12 * s, 12 * s, 0);
+      g.beginPath(); g.arc(-10 * s, -12 * s, 2.2 * s, 0, TAU); g.fill();
+      g.beginPath(); g.arc(10 * s, -12 * s, 2.2 * s, 0, TAU); g.fill();
+      break;
+    }
+    case 'ogre': {
+      // fat tusked ogre with a club
+      const br = Math.sin(t * 3) * s;
+      g.beginPath(); g.ellipse(0, -26 * s + br * 0.4, 18 * s, 19 * s, 0, 0, TAU); g.stroke();
+      g.beginPath(); g.arc(f * 7 * s, -50 * s + br * 0.6, 8 * s, 0, TAU); g.stroke();
+      E(f * 10 * s, -52 * s + br * 0.6, 1.8 * s);
+      g.beginPath(); g.moveTo(f * 3 * s, -45 * s); g.lineTo(f * 1 * s, -40 * s); g.stroke(); // tusks
+      g.beginPath(); g.moveTo(f * 11 * s, -45 * s); g.lineTo(f * 13 * s, -40 * s); g.stroke();
+      // club arm
+      const swing = b.atkT > 0 ? Math.sin((1 - b.atkT / 0.25) * Math.PI) : 0;
+      const ca = lerp(-0.9, 0.5, swing);
+      const cx2 = f * Math.cos(ca) * 20 * s, cy2 = -40 * s + Math.sin(ca) * 20 * s;
+      seg2(f * 10 * s, -40 * s, f * 16 * s, -42 * s + 6 * s * swing, cx2, cy2);
+      g.lineWidth = Math.max(5, 3.4 * s);
+      g.beginPath(); g.moveTo(cx2, cy2); g.lineTo(cx2 + f * 12 * s, cy2 - 2 * s); g.stroke();
+      g.lineWidth = Math.max(3.5, 2.2 * s);
+      seg2(-f * 10 * s, -40 * s, -f * 15 * s, -32 * s, -f * 13 * s, -22 * s);
+      // stubby legs
+      seg2(-7 * s, -10 * s, -8 * s, -5 * s, -9 * s, 0);
+      seg2(7 * s, -10 * s, 8 * s, -5 * s, 9 * s, 0);
+      break;
+    }
+    case 'icetitan': {
+      // angular crystal colossus with a glowing core
+      g.beginPath();
+      g.moveTo(-12 * s, -16 * s); g.lineTo(-17 * s, -50 * s); g.lineTo(0, -60 * s);
+      g.lineTo(17 * s, -50 * s); g.lineTo(12 * s, -16 * s); g.closePath();
+      g.stroke();
+      g.beginPath(); g.moveTo(-6 * s, -60 * s); g.lineTo(0, -72 * s); g.lineTo(6 * s, -60 * s); g.stroke(); // head shard
+      E(f * 2 * s, -63 * s, 1.8 * s);
+      // shoulder crystals
+      g.beginPath(); g.moveTo(-17 * s, -50 * s); g.lineTo(-26 * s, -62 * s); g.lineTo(-12 * s, -54 * s); g.stroke();
+      g.beginPath(); g.moveTo(17 * s, -50 * s); g.lineTo(26 * s, -62 * s); g.lineTo(12 * s, -54 * s); g.stroke();
+      // glowing core
+      g.fillStyle = eye; g.globalAlpha *= 0.5 + 0.5 * Math.sin(t * 5);
+      g.beginPath(); g.arc(0, -38 * s, 4 * s, 0, TAU); g.fill();
+      g.globalAlpha = b.state === 'tele' ? 0.55 + 0.45 * Math.sin(t * 30) : 1;
+      g.fillStyle = col;
+      // angular limbs
+      seg2(-15 * s, -46 * s, -22 * s, -34 * s, -19 * s, -20 * s);
+      seg2(15 * s, -46 * s, f > 0 ? 26 * s : 22 * s, -34 * s, 24 * s, -22 * s);
+      seg2(-9 * s, -16 * s, -12 * s, -8 * s, -14 * s, 0);
+      seg2(9 * s, -16 * s, 12 * s, -8 * s, 14 * s, 0);
+      break;
+    }
+    case 'dragon': {
+      // winged dragon: long neck, tail, flapping wings, fire maw
+      const flap = Math.sin(t * 7) * 10 * s;
+      // tail
+      g.beginPath(); g.moveTo(-f * 14 * s, -24 * s);
+      g.quadraticCurveTo(-f * 32 * s, -28 * s, -f * 42 * s, -14 * s); g.stroke();
+      g.beginPath(); g.moveTo(-f * 42 * s, -14 * s); g.lineTo(-f * 47 * s, -19 * s); g.lineTo(-f * 45 * s, -10 * s); g.closePath(); g.fill();
+      // body
+      g.beginPath(); g.ellipse(-f * 2 * s, -24 * s, 20 * s, 11 * s, 0, 0, TAU); g.stroke();
+      // legs
+      seg2(-f * 10 * s, -16 * s, -f * 12 * s, -8 * s, -f * 14 * s, 0);
+      seg2(f * 8 * s, -16 * s, f * 10 * s, -8 * s, f * 12 * s, 0);
+      // neck + head
+      g.beginPath(); g.moveTo(f * 14 * s, -30 * s);
+      g.quadraticCurveTo(f * 24 * s, -44 * s, f * 26 * s, -54 * s); g.stroke();
+      g.beginPath(); g.moveTo(f * 26 * s, -58 * s); g.lineTo(f * 38 * s, -53 * s); g.lineTo(f * 26 * s, -49 * s); g.closePath(); g.stroke();
+      E(f * 28 * s, -55 * s, 1.7 * s);
+      // horns
+      g.beginPath(); g.moveTo(f * 26 * s, -58 * s); g.lineTo(f * 22 * s, -65 * s); g.stroke();
+      // wings
+      g.beginPath(); g.moveTo(-f * 2 * s, -32 * s); g.lineTo(-f * 16 * s, -52 * s - flap); g.lineTo(-f * 26 * s, -36 * s - flap * 0.5); g.stroke();
+      g.beginPath(); g.moveTo(2 * f * s, -32 * s); g.lineTo(-f * 8 * s, -56 * s - flap); g.lineTo(-f * 20 * s, -42 * s - flap * 0.5); g.stroke();
+      // fire glow in the maw when breathing
+      if (b.state === 'shoot' || b.state === 'laser' || b.state === 'tele') {
+        g.fillStyle = '#ff7a2a'; g.globalAlpha *= 0.8;
+        g.beginPath(); g.arc(f * 36 * s, -53 * s, (2 + Math.sin(t * 20)) * s, 0, TAU); g.fill();
+        g.globalAlpha = b.state === 'tele' ? 0.55 + 0.45 * Math.sin(t * 30) : 1;
+      }
+      break;
+    }
+    case 'seamonster': {
+      // tentacled horror with one huge eye
+      const bob2 = Math.sin(t * 2.5) * 4;
+      for (let i = 0; i < 5; i++) {
+        const bx = (i - 2) * 9 * s;
+        const tipX = bx + Math.sin(t * 3 + i * 1.7) * 10 * s;
+        g.beginPath();
+        g.moveTo(bx * 0.6, -30 * s + bob2);
+        g.quadraticCurveTo(bx, -14 * s, tipX, 0);
+        g.stroke();
+      }
+      g.beginPath(); g.arc(0, -40 * s + bob2, 17 * s, 0, TAU); g.stroke();
+      // dripping slime
+      g.beginPath(); g.arc(8 * s, -24 * s + bob2 + Math.sin(t * 6) * 2, 1.5 * s, 0, TAU); g.fill();
+      // the eye
+      g.fillStyle = '#fff';
+      g.beginPath(); g.ellipse(f * 5 * s, -42 * s + bob2, 7 * s, 8 * s, 0, 0, TAU); g.fill();
+      g.fillStyle = b.enraged ? '#ff2222' : '#0a3a4a';
+      g.beginPath(); g.arc(f * 7 * s, -42 * s + bob2, 3.2 * s, 0, TAU); g.fill();
+      g.fillStyle = col;
+      break;
+    }
+    case 'ghost': {
+      // floating phantom, translucent, wailing
+      const bob2 = Math.sin(t * 2) * 6;
+      g.globalAlpha *= 0.78;
+      g.beginPath();
+      g.arc(0, -52 * s + bob2, 11 * s, Math.PI, 0);
+      g.lineTo(13 * s, -16 * s + bob2);
+      for (let i = 0; i < 4; i++) g.quadraticCurveTo((9.75 - i * 6.5) * s, (-8 + Math.sin(t * 5 + i) * 3) * s + bob2, (6.5 - i * 6.5) * s, -16 * s + bob2);
+      g.closePath();
+      g.stroke();
+      // hollow eyes + mouth
+      g.fillStyle = b.enraged ? '#ff2222' : '#000';
+      g.beginPath(); g.ellipse(f * 6 * s - 3 * s, -54 * s + bob2, 2.4 * s, 3.4 * s, 0, 0, TAU); g.fill();
+      g.beginPath(); g.ellipse(f * 6 * s + 4 * s, -54 * s + bob2, 2.4 * s, 3.4 * s, 0, 0, TAU); g.fill();
+      g.beginPath(); g.ellipse(f * 5 * s, -46 * s + bob2, 2 * s, 3 * s + Math.sin(t * 4) * s, 0, 0, TAU); g.fill();
+      g.fillStyle = col;
+      break;
+    }
+    case 'lion': {
+      // four-legged beast king with a spiked mane
+      const gallop = Math.sin(b.legPh * 1.4);
+      g.beginPath(); g.ellipse(-f * 2 * s, -26 * s, 21 * s, 10 * s, 0, 0, TAU); g.stroke();
+      // legs
+      seg2(-f * 14 * s, -20 * s, -f * 16 * s, -10 * s, -f * (16 + gallop * 4) * s, 0);
+      seg2(-f * 8 * s, -20 * s, -f * 9 * s, -10 * s, -f * (9 - gallop * 4) * s, 0);
+      seg2(f * 8 * s, -20 * s, f * 9 * s, -10 * s, f * (9 + gallop * 4) * s, 0);
+      seg2(f * 14 * s, -20 * s, f * 16 * s, -10 * s, f * (16 - gallop * 4) * s, 0);
+      // tail
+      g.beginPath(); g.moveTo(-f * 22 * s, -28 * s); g.quadraticCurveTo(-f * 30 * s, -42 * s, -f * 26 * s, -46 * s); g.stroke();
+      g.beginPath(); g.arc(-f * 26 * s, -47 * s, 2.2 * s, 0, TAU); g.fill();
+      // head + mane
+      const hx2 = f * 22 * s, hy2 = -38 * s;
+      for (let i = 0; i < 9; i++) {
+        const a = -Math.PI / 2 + (i - 4) * 0.42;
+        g.beginPath(); g.moveTo(hx2 + Math.cos(a) * 8 * s, hy2 + Math.sin(a) * 8 * s);
+        g.lineTo(hx2 + Math.cos(a) * (13 + (i % 2) * 2.5) * s, hy2 + Math.sin(a) * (13 + (i % 2) * 2.5) * s); g.stroke();
+      }
+      g.beginPath(); g.arc(hx2, hy2, 8 * s, 0, TAU); g.stroke();
+      E(hx2 + f * 3 * s, hy2 - 2 * s, 1.7 * s);
+      // fangs
+      g.beginPath(); g.moveTo(hx2 + f * 6 * s, hy2 + 5 * s); g.lineTo(hx2 + f * 7 * s, hy2 + 9 * s); g.stroke();
+      break;
+    }
+    case 'devil': {
+      // arch-devil: horns, bat wings, arrow tail, trident
+      const flap = Math.sin(t * 5) * 6 * s;
+      // wings
+      for (const side of [-1, 1]) {
+        g.beginPath();
+        g.moveTo(side * 6 * s, -44 * s);
+        g.lineTo(side * 24 * s, -60 * s - flap);
+        g.lineTo(side * 20 * s, -46 * s - flap * 0.4);
+        g.lineTo(side * 30 * s, -44 * s - flap * 0.6);
+        g.lineTo(side * 16 * s, -34 * s);
+        g.stroke();
+      }
+      drawStick(0, 0, s, col, f, { pose: b.atkT > 0 ? 'punch' : 'guard', t: b.atkT > 0 ? 1 - b.atkT / 0.25 : 0, run: Math.abs(b.vx) / 2, legPh: b.legPh, eyes: eye, time: t });
+      // horns
+      const hx2 = f * 2 * s, hy2 = -52 * s;
+      g.beginPath(); g.moveTo(hx2 - 4 * s, hy2 - 4 * s); g.quadraticCurveTo(hx2 - 9 * s, hy2 - 10 * s, hx2 - 6 * s, hy2 - 14 * s); g.stroke();
+      g.beginPath(); g.moveTo(hx2 + 4 * s, hy2 - 4 * s); g.quadraticCurveTo(hx2 + 9 * s, hy2 - 10 * s, hx2 + 6 * s, hy2 - 14 * s); g.stroke();
+      // arrow tail
+      g.beginPath(); g.moveTo(0, -26 * s); g.quadraticCurveTo(-f * 16 * s, -14 * s, -f * 22 * s, -22 * s); g.stroke();
+      g.beginPath(); g.moveTo(-f * 22 * s, -22 * s); g.lineTo(-f * 27 * s, -24 * s); g.lineTo(-f * 23 * s, -27 * s); g.closePath(); g.fill();
+      // trident
+      const tx2 = f * 15 * s, ty2 = -45 * s;
+      g.beginPath(); g.moveTo(tx2 - f * 4 * s, ty2 + 18 * s); g.lineTo(tx2 + f * 6 * s, ty2 - 14 * s); g.stroke();
+      for (const o of [-3, 0, 3]) {
+        g.beginPath(); g.moveTo(tx2 + f * (3 + o * 0.4) * s + o * s, ty2 - 12 * s); g.lineTo(tx2 + f * 7 * s + o * s, ty2 - 21 * s); g.stroke();
+      }
+      break;
+    }
+    case 'voidbeast': {
+      // mass of darkness around a great eye, tentacles of static
+      const bob2 = Math.sin(t * 2.2) * 5;
+      g.fillStyle = '#05050c';
+      g.beginPath(); g.arc(0, -38 * s + bob2, 16 * s + Math.sin(t * 4) * 1.5 * s, 0, TAU); g.fill(); g.stroke();
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * TAU + t * 0.6;
+        const r0 = 15 * s, r1 = (24 + 6 * Math.sin(t * 3 + i * 2)) * s;
+        g.beginPath();
+        g.moveTo(Math.cos(a) * r0, -38 * s + bob2 + Math.sin(a) * r0 * 0.8);
+        g.quadraticCurveTo(Math.cos(a) * r1 * 1.15, -38 * s + bob2 + Math.sin(a) * r1, Math.cos(a + 0.5) * r1, Math.min(0, -38 * s + bob2 + Math.sin(a + 0.5) * r1 * 1.3));
+        g.stroke();
+      }
+      // the eye
+      g.fillStyle = '#fff';
+      g.beginPath(); g.ellipse(0, -38 * s + bob2, 8 * s, 6 * s, 0, 0, TAU); g.fill();
+      g.fillStyle = b.enraged ? '#ff2222' : '#5a0d8a';
+      g.beginPath(); g.arc(f * 2.5 * s, -38 * s + bob2, 3 * s, 0, TAU); g.fill();
+      g.fillStyle = '#000';
+      g.beginPath(); g.ellipse(f * 2.5 * s, -38 * s + bob2, 1.2 * s, 2.6 * s, 0, 0, TAU); g.fill();
+      g.fillStyle = col;
+      // orbiting motes
+      for (let i = 0; i < 3; i++) {
+        const a = t * 2 + i * 2.1;
+        g.beginPath(); g.arc(Math.cos(a) * 26 * s, -38 * s + bob2 + Math.sin(a) * 14 * s, 1.6 * s, 0, TAU); g.fill();
+      }
+      break;
+    }
+    case 'death': {
+      // DEATH INCARNATE: hooded reaper, scythe, burning gaze
+      const bob2 = Math.sin(t * 1.8) * 5;
+      // pulsing aura
+      g.globalAlpha *= 0.25 + 0.15 * Math.sin(t * 3);
+      g.beginPath(); g.arc(0, -40 * s + bob2, 34 * s, 0, TAU); g.stroke();
+      g.globalAlpha = b.state === 'tele' ? 0.55 + 0.45 * Math.sin(t * 30) : 1;
+      // cloak
+      g.fillStyle = '#0a0512';
+      g.beginPath();
+      g.moveTo(0, -68 * s + bob2);
+      g.quadraticCurveTo(-14 * s, -60 * s + bob2, -12 * s, -34 * s + bob2);
+      g.lineTo(-16 * s, 0);
+      for (let i = 0; i < 4; i++) g.quadraticCurveTo((-12 + i * 8) * s, -7 * s + Math.sin(t * 4 + i) * 3 * s, (-8 + i * 8) * s, 0);
+      g.lineTo(12 * s, -34 * s + bob2);
+      g.quadraticCurveTo(14 * s, -60 * s + bob2, 0, -68 * s + bob2);
+      g.closePath(); g.fill(); g.stroke();
+      // hood + void face
+      g.fillStyle = '#000';
+      g.beginPath(); g.arc(f * 2 * s, -58 * s + bob2, 7.5 * s, 0, TAU); g.fill();
+      g.fillStyle = b.enraged ? '#ff2222' : '#c44dff';
+      g.beginPath(); g.arc(f * 4 * s - 2.5 * s, -59 * s + bob2, 1.6 * s, 0, TAU); g.fill();
+      g.beginPath(); g.arc(f * 4 * s + 2.5 * s, -59 * s + bob2, 1.6 * s, 0, TAU); g.fill();
+      g.fillStyle = col;
+      // skeletal hands + scythe
+      const swing = b.atkT > 0 ? Math.sin((1 - b.atkT / 0.25) * Math.PI) : 0;
+      const sa = lerp(-0.5, 0.6, swing) * f;
+      const shx = f * 14 * s, shy = -44 * s + bob2;
+      g.beginPath(); g.arc(shx, shy, 2 * s, 0, TAU); g.fill();
+      g.save();
+      g.translate(shx, shy); g.rotate(sa);
+      g.beginPath(); g.moveTo(-f * 4 * s, 22 * s); g.lineTo(f * 6 * s, -30 * s); g.stroke();
+      g.lineWidth = Math.max(4, 2.6 * s);
+      g.beginPath(); g.arc(f * 2 * s, -32 * s, 16 * s, f > 0 ? Math.PI * 1.15 : Math.PI * 1.45, f > 0 ? Math.PI * 1.55 : Math.PI * 1.85); g.stroke();
+      g.restore();
+      g.lineWidth = Math.max(3.5, 2.2 * s);
+      break;
+    }
+  }
+  g.restore();
+  g.globalAlpha = 1;
+}
+
 function poseOf(ent, isPlayer) {
   if (isPlayer) {
     if (ent.hurtT > 0) return { pose: 'hurt' };
@@ -1659,11 +2016,6 @@ function drawEntities() {
   }
 
   if (boss && boss.visible) {
-    const o = poseOf(boss, false);
-    o.run = Math.abs(boss.vx) / 2; o.legPh = boss.legPh; o.lw = 4.2; o.time = levelT;
-    o.eyes = boss.enraged ? '#ff2222' : '#ffe14d';
-    if (boss.state === 'tele') { g.globalAlpha = 0.6 + 0.4 * Math.sin(levelT * 30); }
-    if (boss.state === 'spin') { o.pose = 'slash'; o.t = (levelT * 6) % 1; }
     if (boss.state === 'laser' && !boss.fired) {
       g.strokeStyle = '#f33'; g.globalAlpha = 0.5; g.lineWidth = 2;
       g.setLineDash([8, 8]);
@@ -1671,8 +2023,7 @@ function drawEntities() {
       g.setLineDash([]);
       g.globalAlpha = 1;
     }
-    drawStick(boss.x, boss.y, boss.scale, boss.hurtT > 0 ? '#fff' : boss.col, boss.facing, o);
-    g.globalAlpha = 1;
+    drawBoss(boss);
   }
 
   if (P && !P.dead) {
@@ -1712,9 +2063,13 @@ function drawHUD() {
   const s = P.stats;
   bar(16, 14, 220, 18, P.hp / s.maxhp, '#d61f1f', '#3a0a0a', 'HP ' + Math.ceil(Math.max(0, P.hp)));
   bar(16, 36, 180, 12, P.energy / s.energyMax, '#f0c428', '#3a3008', '');
+  // lives
+  g.font = 'bold 16px Courier New'; g.textAlign = 'left';
+  g.fillStyle = '#ff4455';
+  g.fillText('♥'.repeat(Math.max(0, lives)), 244, 29);
   // weapon readout
   const w = P.weapons[P.wIdx];
-  g.font = 'bold 12px Courier New'; g.textAlign = 'left';
+  g.font = 'bold 12px Courier New';
   g.fillStyle = '#7ec8ff';
   g.fillText('[Q/E] ' + (P.wIdx + 1) + '/' + P.weapons.length + ' — ' + w.name, 16, 62);
   if (s.special) {
@@ -1743,7 +2098,7 @@ function drawHUD() {
     bar(W / 2 - 220, H - 36, 440, 16, boss.hp / boss.maxhp, boss.enraged ? '#ff2222' : '#c41f7a', '#2a0515', '');
     g.font = 'bold 13px Courier New'; g.textAlign = 'center';
     g.fillStyle = '#fff';
-    g.fillText(boss.name + (boss.enraged ? '  [ENRAGED]' : ''), W / 2, H - 42);
+    g.fillText(boss.name + ' — ' + LOOK_LABEL[boss.look] + (boss.enraged ? '  [ENRAGED]' : ''), W / 2, H - 42);
   }
   if (banner > 0) {
     g.globalAlpha = clamp(banner, 0, 1);
@@ -1786,7 +2141,7 @@ function drawMenu(dt) {
   g.fillStyle = '#d61f1f'; g.fillText('STICK CARNAGE', W / 2, 140);
   g.font = 'bold 16px Courier New';
   g.fillStyle = '#888';
-  g.fillText('40 LEVELS · 10 BONUS ARENAS · 50 BOSSES · 50 POWERS · 16 WEAPONS', W / 2, 172);
+  g.fillText('50 BOSS MONSTERS: TITANS · OGRES · DRAGONS · GHOSTS · DEVILS · 50 POWERS · 16 WEAPONS · 3 LIVES', W / 2, 172);
 
   // 18+ adults-only badge
   g.fillStyle = '#5a0d0d'; g.fillRect(W / 2 - 165, 184, 330, 26);
@@ -1873,10 +2228,14 @@ function drawPowerup(dt) {
   g.fillText('power ' + level + ' / 50', W / 2, cy + 130);
   g.restore();
 
+  if (earnedLife) {
+    g.font = 'bold 17px Courier New'; g.fillStyle = '#ff4455';
+    g.fillText('♥ EXTRA LIFE EARNED — ' + lives + ' LIVES ♥', W / 2, 352);
+  }
   const nw = WEAPONS.find(x => x.lvl === level + 1);
   if (nw) {
     g.font = 'bold 15px Courier New'; g.fillStyle = '#7ec8ff';
-    g.fillText('NEXT LEVEL UNLOCKS WEAPON: ' + nw.name, W / 2, 366);
+    g.fillText('NEXT LEVEL UNLOCKS WEAPON: ' + nw.name, W / 2, 372);
   }
 
   if (level >= 50) {
@@ -1884,7 +2243,7 @@ function drawPowerup(dt) {
   } else {
     const nb = isBonusLevel(level + 1);
     if (button(W / 2 - 150, 390, 300, 46, nb ? 'ENTER BONUS ARENA ' + (level + 1) : 'NEXT: LEVEL ' + (level + 1)) || tap('Enter')) {
-      sfx('select'); startLevel(level + 1);
+      sfx('select'); startLevel(level + 1, true);
     }
     if (button(W / 2 - 150, 446, 300, 34, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
   }

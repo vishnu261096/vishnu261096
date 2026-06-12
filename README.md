@@ -1,4 +1,4 @@
-# STICK CARNAGE 🩸 (18+ — EXTREME VIOLENCE)
+# STICK CARNAGE 🩸 (18+ — EXTREME VIOLENCE) — v3 RELEASE
 
 A brutal stickman fighting game with full blood & gore — built in pure HTML5 canvas + JavaScript, zero dependencies.
 
@@ -11,8 +11,16 @@ A brutal stickman fighting game with full blood & gore — built in pure HTML5 c
 - **40 main levels + 10 bonus blood-frenzy arenas** (50 total) across 10 themed zones:
   Training Grounds → Neon City → Crimson Forest → Frozen Wastes → Scorched Desert →
   Toxic Sewers → Shadow Temple → Sky Fortress → Hell Gates → The Void
-- **Every level ends with a named boss** — 50 unique bosses with 8 attack patterns and
-  the multi-pattern final god **DEATH INCARNATE** on level 50. Bosses **enrage** at half HP.
+- **Every level ends with a named boss, and every zone fights a different MONSTER**:
+  armored Warlord → War Machine (mech) → Ogre → Ice Titan → **Dragon** → Sea Monster →
+  Ghost → Beast King (lion) → Arch-Devil → Void Horror → and on level 50, **DEATH ITSELF**,
+  a scythe-wielding reaper. Each creature is drawn uniquely with its own attack patterns,
+  and all bosses **enrage** at half HP.
+- **3 lives per run** — when you die you **restore on the spot** with full HP and a
+  protective blast. Every 5th boss slain earns **+1 extra life**. Lose all lives = game over.
+- **Enemies improve their fighting skills every zone**: they dodge your attacks, ninjas
+  throw shurikens mid-leap, gunners switch to burst fire, elite brutes do leaping
+  ground slams.
 - **A new power after every level — 50 powers total**, including 7 evolving special attacks:
   Shockwave → Fireball → Lightning Storm → Blade Tornado → Meteor Call → Black Hole → **APOCALYPSE**
 - **16-weapon arsenal**, unlocked as you climb the levels:
