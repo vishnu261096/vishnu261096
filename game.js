@@ -388,6 +388,11 @@ function killEnemy(e, kb, ctx) {
     floatText(e.x, e.y - 70, 'SLICED IN HALF!', '#ff3333', true);
   }
   else gibBurst(e.x, e.y, e.col, e.scale || 1, kb, gore);
+  if (e.elite) {
+    score += 150 + level * 5;
+    P.energy = Math.min(P.stats.energyMax, P.energy + 15);
+    floatText(e.x, e.y - 85, 'ELITE BOUNTY +' + (150 + level * 5), '#ffe14d', true);
+  }
   addDecal(e.x, rnd(8, 16) * gore); addDecal(e.x + rnd(-20, 20), rnd(5, 10));
   if (P.stats.killHeal) P.hp = Math.min(P.stats.maxhp, P.hp + P.stats.killHeal);
   if (P.stats.bloodlust) P.bloodlustT = 5;
@@ -446,19 +451,28 @@ const ECOL = { grunt: '#d8d8d8', runner: '#7ec8ff', brute: '#c98a4b', ninja: '#9
 
 function makeEnemy(type, x) {
   const n = level;
-  const skill = zoneIdx(n); // fighters get sharper every zone
+  const skill = (n - 1) / 5; // fighters sharpen every single level
   const base = { grunt: 1, runner: 0.7, brute: 2.6, ninja: 0.9, gunner: 0.8, bomber: 0.6, mage: 1, shield: 1.8 }[type];
-  return {
+  // footsoldiers arm themselves with better blades as the war escalates
+  const blade = ['grunt', 'runner', 'ninja'].includes(type)
+    ? (n >= 44 ? 'katana' : n >= 32 ? 'sword' : n >= 20 ? 'machete' : n >= 8 ? 'knife' : null) : null;
+  const e = {
     type, x, y: GROUND, vx: 0, vy: 0, facing: -1, onGround: true,
     hp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
     maxhp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
-    dmg: (5 + n * 0.38) * (type === 'brute' ? 1.6 : 1),
+    dmg: (5 + n * 0.38) * (type === 'brute' ? 1.6 : 1) * (blade ? 1.3 : 1),
     speed: { grunt: 1.6, runner: 3.4, brute: 1.1, ninja: 2.4, gunner: 1.4, bomber: 3.0, mage: 1.0, shield: 1.2 }[type] + n * 0.02 + skill * 0.12,
     cd: rnd(0.5, 1.4), col: ECOL[type], scale: type === 'brute' ? 1.35 : type === 'shield' ? 1.15 : 1,
     hurtT: 0, legPh: rnd(0, TAU), dead: false, jumpCd: rnd(0.5, 2), t: 0,
     fleeT: 0, screamT: 0, atkT: 0,
-    skill, dodgeCd: rnd(0, 1), burst: 0, slamCd: rnd(2, 4),
+    skill, dodgeCd: rnd(0, 1), burst: 0, slamCd: rnd(2, 4), blade, elite: false,
   };
+  // elites: bigger, meaner, glowing — worth a bounty
+  if (n >= 12 && type !== 'bomber' && Math.random() < 0.1 + n * 0.003) {
+    e.elite = true;
+    e.hp *= 1.7; e.maxhp *= 1.7; e.dmg *= 1.5; e.scale *= 1.22; e.speed *= 1.12;
+  }
+  return e;
 }
 
 function spawnWave() {
@@ -2014,7 +2028,7 @@ function poseOf(ent, isPlayer) {
   }
   if (ent.fleeT > 0) return { pose: 'panic' };
   if (ent.hurtT > 0) return { pose: 'hurt' };
-  if (ent.atkT > 0) return { pose: 'punch', t: 1 - ent.atkT / 0.25 };
+  if (ent.atkT > 0) return { pose: ent.blade ? 'slash' : 'punch', t: 1 - ent.atkT / 0.25 };
   if (!ent.onGround) return { pose: 'jump' };
   return { pose: 'guard' };
 }
@@ -2024,10 +2038,23 @@ function drawEntities() {
     if (e.dead) continue;
     const o = poseOf(e, false);
     o.run = Math.abs(e.vx) / 2; o.legPh = e.legPh; o.time = levelT + e.t;
-    o.eyes = e.fleeT > 0 ? '#fff' : '#f33';
+    o.eyes = e.fleeT > 0 ? '#fff' : e.elite ? '#ffe14d' : '#f33';
+    if (e.blade) o.weapon = e.blade;
+    if (e.elite) {
+      // golden aura under elite fighters
+      g.strokeStyle = '#ffe14d'; g.globalAlpha = 0.35 + 0.2 * Math.sin(levelT * 6);
+      g.lineWidth = 2;
+      g.beginPath(); g.ellipse(e.x, e.y + 2, 20 * e.scale, 6, 0, 0, TAU); g.stroke();
+      g.globalAlpha = 1;
+    }
     if (e.hurtT > 0) { g.globalAlpha = 0.7; }
     drawStick(e.x, e.y, e.scale, e.hurtT > 0 ? '#fff' : e.col, e.facing, o);
     g.globalAlpha = 1;
+    if (e.elite) {
+      g.font = 'bold 9px Courier New'; g.textAlign = 'center';
+      g.fillStyle = '#ffe14d';
+      g.fillText('ELITE', e.x, e.y - 68 * e.scale);
+    }
     if (e.hp < e.maxhp) {
       g.fillStyle = '#300'; g.fillRect(e.x - 16, e.y - 62 * e.scale, 32, 4);
       g.fillStyle = '#e22'; g.fillRect(e.x - 16, e.y - 62 * e.scale, 32 * clamp(e.hp / e.maxhp, 0, 1), 4);
