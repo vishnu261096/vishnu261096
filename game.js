@@ -11,6 +11,7 @@ const g = cv.getContext('2d');
 const W = 960, H = 540, GROUND = 470;
 const TAU = Math.PI * 2;
 const rnd = (a, b) => a + Math.random() * (b - a);
+const ri = (a, b) => Math.floor(rnd(a, b + 1));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -24,11 +25,14 @@ const TESTING = false; // release build: levels unlock by beating them
 
 /* ---------------- input ---------------- */
 const keys = {}, once = {};
+// taps are queued and applied at frame start so events that land
+// mid-frame are never wiped before the game reads them
+const pendingOnce = [];
 let mx = 0, my = 0, mclick = false;
 addEventListener('keydown', e => {
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (!e.repeat) once[k] = true;
+  if (!e.repeat) pendingOnce.push(k);
   keys[k] = true;
   initAudio();
 });
@@ -70,14 +74,25 @@ function hitBtn(x, y) {
   }
   return best;
 }
+let fsTried = false;
 cv.addEventListener('touchstart', ev => {
   ev.preventDefault(); initAudio();
+  // first touch: go fullscreen and lock landscape where supported
+  if (!fsTried) {
+    fsTried = true;
+    const el = document.documentElement;
+    if (el.requestFullscreen) {
+      el.requestFullscreen().then(() => {
+        if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+      }).catch(() => {});
+    }
+  }
   for (const t of ev.changedTouches) {
     const [x, y] = canvasPos(t);
     const b = (state === 'play' || state === 'pause') ? hitBtn(x, y) : null;
     if (b) {
       touchMap.set(t.identifier, b.k);
-      if (!keys[b.k]) once[b.k] = true;
+      if (!keys[b.k]) pendingOnce.push(b.k);
       keys[b.k] = true;
     } else { mx = x; my = y; mclick = true; }
   }
@@ -92,11 +107,13 @@ cv.addEventListener('touchmove', ev => {
     if (b && b.k !== old) {
       keys[old] = false;
       touchMap.set(t.identifier, b.k);
-      if (!keys[b.k]) once[b.k] = true;
+      if (!keys[b.k]) pendingOnce.push(b.k);
       keys[b.k] = true;
     }
   }
 }, { passive: false });
+const rotEl = document.getElementById('rot');
+if (rotEl && !TOUCH) rotEl.remove();
 const touchEnd = ev => {
   for (const t of ev.changedTouches) {
     const k = touchMap.get(t.identifier);
@@ -128,13 +145,15 @@ function sfx(type) {
     const gn = AC.createGain(); gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(gn); gn.connect(out); o.start(t); o.stop(t + dur);
   }
+  // kill streaks pitch the gore up — rapid kills sound increasingly frantic
+  const pr = 1 + Math.min(0.7, streak * 0.07);
   switch (type) {
     case 'punch':  noise(0.08, 0.5, 900); tone(180, 60, 0.08, 0.3, 'square'); break;
     case 'kick':   noise(0.12, 0.6, 700); tone(140, 40, 0.12, 0.4, 'square'); break;
-    case 'slice':  noise(0.1, 0.5, 4000); tone(800, 200, 0.1, 0.25, 'sawtooth'); break;
-    case 'squish': noise(0.22, 0.7, 500); tone(300, 50, 0.2, 0.35, 'sawtooth'); break;
-    case 'gib':    noise(0.3, 0.8, 400); tone(220, 30, 0.3, 0.4, 'sawtooth'); break;
-    case 'decap':  noise(0.18, 0.7, 3000); noise(0.35, 0.8, 400); tone(500, 40, 0.3, 0.4, 'sawtooth'); break;
+    case 'slice':  noise(0.1, 0.5, 4000); tone(800 * pr, 200, 0.1, 0.25, 'sawtooth'); break;
+    case 'squish': noise(0.22, 0.7, 500); tone(300 * pr, 50, 0.2, 0.35, 'sawtooth'); break;
+    case 'gib':    noise(0.3, 0.8, 400); tone(220 * pr, 30, 0.3, 0.4, 'sawtooth'); break;
+    case 'decap':  noise(0.18, 0.7, 3000); noise(0.35, 0.8, 400); tone(500 * pr, 40, 0.3, 0.4, 'sawtooth'); break;
     case 'hurt':   tone(250, 90, 0.15, 0.4, 'square'); noise(0.1, 0.3, 1200); break;
     case 'boom':   noise(0.5, 0.9, 300); tone(120, 25, 0.5, 0.6, 'sine'); break;
     case 'shoot':  tone(900, 300, 0.1, 0.25, 'square'); break;
@@ -149,6 +168,7 @@ function sfx(type) {
     case 'select': tone(500, 750, 0.07, 0.2, 'square'); break;
     case 'zap':    tone(1800, 100, 0.18, 0.35, 'sawtooth'); noise(0.12, 0.4, 4000); break;
     case 'scream': tone(rnd(600, 900), rnd(200, 400), 0.3, 0.2, 'sawtooth'); break;
+    case 'coin':   tone(950 * pr, 1500 * pr, 0.08, 0.18, 'square'); break;
   }
 }
 
@@ -336,6 +356,7 @@ function buildStats(powerCount) {
 /* ---------------- world containers ---------------- */
 let particles = [], gibs = [], decals = [], projs = [], effects = [], texts = [], enemies = [], corpses = [];
 let plats = [], ladders = []; // vertical arena: platforms + ladders
+let coins = []; // kills drop gold that flies into your score
 let P = null, boss = null;
 let shake = 0, hitstop = 0, flash = 0, slowmo = 0;
 let state = 'menu';
@@ -417,6 +438,52 @@ function headPop(e) {
   if (corpses.length > 14) corpses.splice(0, corpses.length - 14);
   floatText(e.x, e.y - 70, 'HEADSHOT!', '#ffe14d', true);
 }
+function spawnCoins(x, y, n) {
+  for (let i = 0; i < n && coins.length < 44; i++) {
+    coins.push({ x: x + rnd(-6, 6), y: y - 24, vx: rnd(-3.5, 3.5), vy: rnd(-8.5, -4), t: 0 });
+  }
+}
+function updateCoins(dt) {
+  const f = dt * 60;
+  for (let i = coins.length - 1; i >= 0; i--) {
+    const c = coins[i];
+    c.t += dt;
+    if (c.t < 0.55) {
+      // burst out of the kill
+      c.vy += 0.5 * f;
+      c.x += c.vx * f; c.y += c.vy * f;
+      if (c.y > GROUND) { c.y = GROUND; c.vy *= -0.5; }
+    } else {
+      // magnet into the score counter
+      const tx = W - 70, ty = 56;
+      const a = Math.atan2(ty - c.y, tx - c.x);
+      const sp = (9 + c.t * 14) * f;
+      c.x += Math.cos(a) * sp; c.y += Math.sin(a) * sp;
+      if (Math.hypot(tx - c.x, ty - c.y) < 30) {
+        score += 5;
+        sfx('coin');
+        coins.splice(i, 1);
+      }
+    }
+  }
+}
+function drawCoins() {
+  g.globalCompositeOperation = 'lighter';
+  for (const c of coins) {
+    const gl = g.createRadialGradient(c.x, c.y, 1, c.x, c.y, 10);
+    gl.addColorStop(0, 'rgba(255,225,100,0.9)'); gl.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gl;
+    g.beginPath(); g.arc(c.x, c.y, 10, 0, TAU); g.fill();
+  }
+  g.globalCompositeOperation = 'source-over';
+  for (const c of coins) {
+    g.fillStyle = '#ffd24d';
+    g.beginPath(); g.arc(c.x, c.y, 4.2, 0, TAU); g.fill();
+    g.fillStyle = '#fff3c4';
+    g.beginPath(); g.arc(c.x - 1.2, c.y - 1.2, 1.6, 0, TAU); g.fill();
+  }
+}
+
 function floatText(x, y, str, col, big) {
   texts.push({ x, y, str, col: col || '#fff', life: 1, big: !!big });
   if (texts.length > 40) texts.splice(0, texts.length - 40);
@@ -522,6 +589,7 @@ function killEnemy(e, kb, ctx) {
     P.energy = Math.min(P.stats.energyMax, P.energy + 15);
     floatText(e.x, e.y - 85, 'ELITE BOUNTY +' + (150 + level * 5), '#ffe14d', true);
   }
+  spawnCoins(e.x, e.y, e.elite ? 7 : ri(2, 3));
   addDecal(e.x, rnd(8, 16) * gore); addDecal(e.x + rnd(-20, 20), rnd(5, 10));
   if (P.stats.killHeal) P.hp = Math.min(P.stats.maxhp, P.hp + P.stats.killHeal);
   if (P.stats.bloodlust) P.bloodlustT = 5;
@@ -1493,7 +1561,7 @@ function startLevel(n, keepLives) {
   level = n;
   if (!keepLives) { lives = 3; score = 0; }
   bonusMode = isBonusLevel(n);
-  particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = []; corpses = [];
+  particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = []; corpses = []; coins = [];
   boss = null; bossSpawned = false;
   // build the arena: side platforms with ladders, higher decks and movers as levels rise
   plats = []; ladders = [];
@@ -1531,6 +1599,7 @@ function updatePlay(dt) {
   updateProjs(dt);
   updateEffects(dt);
   updateCorpses(dt);
+  updateCoins(dt);
 
   if (!bossSpawned && enemies.length === 0) {
     if (wave < totalWaves) spawnWave();
@@ -1553,6 +1622,12 @@ function seg2(ax, ay, bx, by, cx, cy) {
   // hand/foot ball at the end of every limb — instant 3D feel
   g.fillStyle = g.strokeStyle;
   g.beginPath(); g.arc(cx, cy, g.lineWidth * 0.62, 0, TAU); g.fill();
+  // cylinder sheen: thin highlight along the limb makes it read as a 3D tube
+  const ss = g.strokeStyle, lw = g.lineWidth;
+  g.strokeStyle = 'rgba(255,255,255,0.25)';
+  g.lineWidth = Math.max(1, lw * 0.34);
+  g.beginPath(); g.moveTo(ax - 0.9, ay - 1.3); g.lineTo(bx - 0.9, by - 1.3); g.lineTo(cx - 0.9, cy - 1.3); g.stroke();
+  g.strokeStyle = ss; g.lineWidth = lw;
 }
 function drawLimb(ax, ay, bx, by, bend) {
   const mxp = (ax + bx) / 2, myp = (ay + by) / 2;
@@ -1695,8 +1770,14 @@ function drawStick(x, y, s, col, facing, o) {
     g.fillStyle = '#a00';
     g.beginPath(); g.arc(shX, shY - 2 * s, 3.5 * s, 0, TAU); g.fill();
   }
-  // spine
+  // spine with cylinder sheen
   g.beginPath(); g.moveTo(shX, shY); g.lineTo(hipX, hipY); g.stroke();
+  {
+    const ss = g.strokeStyle, lw = g.lineWidth;
+    g.strokeStyle = 'rgba(255,255,255,0.25)'; g.lineWidth = Math.max(1, lw * 0.34);
+    g.beginPath(); g.moveTo(shX - 0.9, shY - 1.3); g.lineTo(hipX - 0.9, hipY - 1.3); g.stroke();
+    g.strokeStyle = ss; g.lineWidth = lw;
+  }
 
   /* ---- legs ---- */
   const L = 26 * s; // full leg length
@@ -1833,6 +1914,16 @@ function drawBackground() {
   const grad = g.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, z.sky[0]); grad.addColorStop(1, z.sky[1]);
   g.fillStyle = grad; g.fillRect(0, 0, W, H);
+
+  // zone sun/moon glow
+  g.globalCompositeOperation = 'lighter';
+  const sun = g.createRadialGradient(W * 0.78, 100, 8, W * 0.78, 100, 150);
+  sun.addColorStop(0, z.accent); sun.addColorStop(1, 'rgba(0,0,0,0)');
+  g.globalAlpha = 0.45;
+  g.fillStyle = sun;
+  g.beginPath(); g.arc(W * 0.78, 100, 150, 0, TAU); g.fill();
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
 
   g.fillStyle = 'rgba(0,0,0,0.35)';
   const zi = zoneIdx(level);
@@ -2423,13 +2514,24 @@ function drawEntities() {
     o.shadowAt = P.standPlat ? P.standPlat.cy : GROUND;
     const w = P.weapons[P.wIdx];
     if (w && w.id !== 'fists') o.weapon = w.id;
-    // hero glow — red when bloodlust rages, cyan otherwise
+    // hero glow — gold when ON FIRE (streak 5+), red in bloodlust, cyan otherwise
     g.globalCompositeOperation = 'lighter';
     const pg = g.createRadialGradient(P.x, P.y - 28, 3, P.x, P.y - 28, 46);
-    pg.addColorStop(0, P.bloodlustT > 0 ? 'rgba(255,60,60,0.5)' : 'rgba(80,180,255,0.35)');
+    pg.addColorStop(0, streak >= 5 ? 'rgba(255,190,50,0.6)' : P.bloodlustT > 0 ? 'rgba(255,60,60,0.5)' : 'rgba(80,180,255,0.35)');
     pg.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = pg;
     g.beginPath(); g.arc(P.x, P.y - 28, 46, 0, TAU); g.fill();
+    // dash speed lines
+    if (P.dashT > 0) {
+      g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 2;
+      for (let i = 0; i < 5; i++) {
+        const ly = P.y - 6 - i * 10;
+        g.beginPath();
+        g.moveTo(P.x - P.facing * (26 + i * 13), ly);
+        g.lineTo(P.x - P.facing * (50 + i * 13), ly);
+        g.stroke();
+      }
+    }
     g.globalCompositeOperation = 'source-over';
     if (P.inv > 0 && Math.sin(levelT * 40) > 0) g.globalAlpha = 0.45;
     drawStick(P.x, P.y, 1.05, '#ffffff', P.facing, o);
@@ -2758,6 +2860,9 @@ function drawPause() {
 let last = 0;
 function frame(ts) {
   requestAnimationFrame(frame);
+  // apply queued taps so none are lost between frames
+  for (const k of pendingOnce) once[k] = true;
+  pendingOnce.length = 0;
   const rawDt = Math.min(0.033, (ts - last) / 1000 || 0.016);
   let dt = rawDt;
   last = ts;
@@ -2781,10 +2886,10 @@ function frame(ts) {
     case 'play':
       updatePlay(dt);
       updateParticles(dt);
-      drawBackground(); drawDecals(); drawPlats(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); g.drawImage(vig, 0, 0); drawTexts(); drawHUD(); drawTouchControls();
+      drawBackground(); drawDecals(); drawPlats(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawCoins(); g.drawImage(vig, 0, 0); drawTexts(); drawHUD(); drawTouchControls();
       break;
     case 'pause':
-      drawBackground(); drawDecals(); drawPlats(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); g.drawImage(vig, 0, 0); drawTexts(); drawHUD();
+      drawBackground(); drawDecals(); drawPlats(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawCoins(); g.drawImage(vig, 0, 0); drawTexts(); drawHUD();
       drawPause();
       break;
     case 'powerup': updateParticles(dt); updateCorpses(dt); drawPowerup(rawDt); break;
