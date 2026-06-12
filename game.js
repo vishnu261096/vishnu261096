@@ -229,6 +229,7 @@ function buildStats(powerCount) {
 
 /* ---------------- world containers ---------------- */
 let particles = [], gibs = [], decals = [], projs = [], effects = [], texts = [], enemies = [], corpses = [];
+let plats = [], ladders = []; // vertical arena: platforms + ladders
 let P = null, boss = null;
 let shake = 0, hitstop = 0, flash = 0, slowmo = 0;
 let state = 'menu';
@@ -325,6 +326,7 @@ function makePlayer() {
     secondWindUsed: false, bloodlustT: 0, dashHitSet: new Set(),
     spinT: 0, castT: 0, lastJ: -9, lastK: -9, flameTick: 0,
     weapons: WEAPONS.filter(w => w.lvl <= level), wIdx: 0,
+    standPlat: null, climbing: false, dropT: 0, wallT: 0, wallDir: 0,
   };
 }
 
@@ -575,12 +577,19 @@ function updateEnemy(e, dt) {
     }
   }
 
+  // chase the player onto platforms: leap up after them
+  if (e.fleeT <= 0 && e.hurtT <= 0 && P.y < e.y - 60 && adx < 180 && e.onGround && e.jumpCd <= 0
+      && e.type !== 'gunner' && e.type !== 'mage' && e.type !== 'shield') {
+    e.vy = -12.8; e.vx += e.facing * 2.5; e.jumpCd = rnd(0.9, 1.8);
+  }
+
   e.vx += want * e.speed * 0.15 * f;
   e.vx *= Math.pow(0.86, f);
   e.vy += 0.55 * f;
+  const prevY = e.y;
   e.x += e.vx * f; e.y += e.vy * f;
   e.x = clamp(e.x, -180, W + 180);
-  if (e.y >= GROUND) { e.y = GROUND; e.vy = 0; e.onGround = true; } else e.onGround = false;
+  e.onGround = landOn(e, prevY);
   if (Math.abs(e.vx) > 0.4 && e.onGround) e.legPh += dt * 11;
   if (e.atkT) e.atkT -= dt;
 }
@@ -733,6 +742,9 @@ function updateBoss(b, dt) {
         damagePlayer(b.dmg, b.facing * 6, b);
         b.t = 0.9;
       }
+      // no camping on platforms: bosses answer with a volley
+      b.airT = (P.y < b.y - 80) ? (b.airT || 0) + dt : 0;
+      if (b.airT > 1.4) { b.airT = 0; b.next = 'shoot'; b.state = 'tele'; b.t = 0.5; break; }
       if (b.t <= 0) bossChoose(b);
       break;
     }
@@ -1007,12 +1019,42 @@ function sawAttack(w) {
   if (hit) blood(P.x + P.facing * 40, P.y - 30, 4, P.facing, 6);
 }
 
+/* ---------------- platforms & ladders ---------------- */
+function updatePlats(dt) {
+  for (const p of plats) {
+    const px = p.cx, py = p.cy;
+    if (p.move) {
+      p.ph += dt * p.move.speed;
+      p.cx = p.x + (p.move.axis === 'x' ? Math.sin(p.ph) * p.move.amp : 0);
+      p.cy = p.y + (p.move.axis === 'y' ? Math.sin(p.ph) * p.move.amp : 0);
+    }
+    p.dx = p.cx - px; p.dy = p.cy - py;
+  }
+  const ride = ent => { if (ent.standPlat) { ent.x += ent.standPlat.dx; ent.y = ent.standPlat.cy; } };
+  if (P && !P.dead) ride(P);
+  for (const e of enemies) ride(e);
+}
+// one-way landing on platforms, then the floor
+function landOn(ent, prevY) {
+  ent.standPlat = null;
+  if (ent.vy >= 0 && (!ent.dropT || ent.dropT <= 0)) {
+    for (const p of plats) {
+      if (prevY <= p.cy + 7 && ent.y >= p.cy && ent.x > p.cx - 6 && ent.x < p.cx + p.w + 6) {
+        ent.y = p.cy; ent.vy = 0; ent.standPlat = p;
+        return true;
+      }
+    }
+  }
+  if (ent.y >= GROUND) { ent.y = GROUND; ent.vy = 0; return true; }
+  return false;
+}
+
 /* ---------------- player update ---------------- */
 function updatePlayer(dt) {
   const f = dt * 60;
   const s = P.stats;
   P.cd -= dt; P.inv -= dt; P.hurtT -= dt; P.dashCd -= dt; P.comboT -= dt;
-  P.bloodlustT -= dt; P.castT -= dt; P.atkT -= dt;
+  P.bloodlustT -= dt; P.castT -= dt; P.atkT -= dt; P.dropT -= dt; P.wallT -= dt;
   if (P.comboT <= 0) P.combo = 0;
   if (s.regen) P.hp = Math.min(s.maxhp, P.hp + s.regen * dt);
   P.energy = Math.min(s.energyMax, P.energy + (8 * s.energyRegen) * dt);
@@ -1039,16 +1081,54 @@ function updatePlayer(dt) {
     if (mv !== 0 && P.hurtT <= 0) P.facing = mv;
   }
 
-  if ((tap('w') || tap('ArrowUp') || tap(' ')) && P.jumpsLeft > 0 && state === 'play') {
-    P.vy = -12.5 * s.jumpMul;
-    P.jumpsLeft--;
-    P.onGround = false;
-    particles.push({ x: P.x, y: P.y, vx: 0, vy: 0, r: 8, col: 'rgba(255,255,255,0.2)', life: 0.25, grav: 0, type: 'ghost' });
+  // ladders: W at the base or S from the top grabs on; W/S climbs; SPACE jumps off
+  const upHeld = keys['w'] || keys['ArrowUp'], downHeld = keys['s'] || keys['ArrowDown'];
+  const lad = ladders.find(l => Math.abs(P.x - l.x) < 16 && P.y > l.y0 - 4 && P.y <= l.y1 + 4);
+  if (!P.climbing && lad) {
+    const grabUp = upHeld && Math.abs(P.x - lad.x) < 12 && (P.onGround ? Math.abs(P.vx) < 3.5 : P.vy > -2);
+    const grabDown = downHeld && P.y < GROUND - 2;
+    if (grabUp || grabDown) { P.climbing = true; P.vx = 0; P.vy = 0; P.dashT = 0; P.standPlat = null; P.onGround = false; }
+  }
+  if (P.climbing) {
+    if (!lad) P.climbing = false;
+    else {
+      P.standPlat = null;
+      P.x = lerp(P.x, lad.x, 0.35);
+      P.vx = 0; P.vy = 0;
+      if (upHeld) { P.y -= 3.1 * f; P.legPh += dt * 10; }
+      if (downHeld) { P.y += 3.1 * f; P.legPh += dt * 10; }
+      if (P.y <= lad.y0) { P.y = lad.y0; P.onGround = true; P.jumpsLeft = s.jumps; P.climbing = false; }
+      if (P.y >= GROUND && downHeld) { P.y = GROUND; P.onGround = true; P.climbing = false; }
+      if (tap(' ')) { P.climbing = false; P.vy = -11 * s.jumpMul; }
+    }
+  }
+
+  // drop through a platform with S
+  if (tap('s') && P.standPlat && !lad && !P.climbing) {
+    P.dropT = 0.25; P.y += 8; P.onGround = false; P.standPlat = null;
+  }
+
+  if ((tap('w') || tap('ArrowUp') || tap(' ')) && state === 'play' && !P.climbing) {
+    if (!P.onGround && P.wallT > 0) {
+      // wall jump: kick off the arena wall
+      P.vy = -12.5 * s.jumpMul;
+      P.vx = -P.wallDir * 9;
+      P.facing = -P.wallDir;
+      P.wallT = 0;
+      sfx('dash');
+      particles.push({ x: P.x, y: P.y - 20, vx: -P.wallDir * 2, vy: 0, r: 8, col: 'rgba(255,255,255,0.25)', life: 0.25, grav: 0, type: 'ghost' });
+    } else if (P.jumpsLeft > 0) {
+      P.vy = -12.5 * s.jumpMul;
+      P.jumpsLeft--;
+      P.onGround = false;
+      particles.push({ x: P.x, y: P.y, vx: 0, vy: 0, r: 8, col: 'rgba(255,255,255,0.2)', life: 0.25, grav: 0, type: 'ghost' });
+    }
   }
 
   if (tap('Shift') && s.dash && P.dashCd <= 0 && (P.onGround || s.airDash)) {
     P.dashT = 0.17; P.dashCd = 0.8; P.inv = Math.max(P.inv, 0.28);
     P.dashHitSet = new Set();
+    P.climbing = false;
     sfx('dash');
   }
 
@@ -1095,13 +1175,27 @@ function updatePlayer(dt) {
     }
   }
 
-  P.vy += 0.55 * f;
-  P.x += P.vx * f; P.y += P.vy * f;
-  P.x = clamp(P.x, 16, W - 16);
-  if (P.y >= GROUND) {
-    if (!P.onGround && P.vy > 8) { shake = Math.min(shake + 2, 8); }
-    P.y = GROUND; P.vy = 0; P.onGround = true; P.jumpsLeft = s.jumps;
-  } else P.onGround = false;
+  if (!P.climbing) {
+    P.vy += 0.55 * f;
+    // wall cling: hold toward the arena wall while falling to slide slowly
+    const pushL = (keys['a'] || keys['ArrowLeft']) && P.x <= 18;
+    const pushR = (keys['d'] || keys['ArrowRight']) && P.x >= W - 18;
+    if (!P.onGround && (pushL || pushR) && P.vy > 0.5) {
+      P.vy = Math.min(P.vy, 1.4);
+      P.wallDir = pushL ? -1 : 1;
+      P.wallT = 0.15;
+      if (Math.random() < 0.2) particles.push({ x: P.x + P.wallDir * 10, y: P.y - 25, vx: 0, vy: 1, r: 2.5, col: '#999', life: 0.3, grav: 0, type: 'ghost' });
+    }
+    const prevVy = P.vy, prevY = P.y;
+    P.x += P.vx * f; P.y += P.vy * f;
+    P.x = clamp(P.x, 16, W - 16);
+    const wasAir = !P.onGround;
+    P.onGround = landOn(P, prevY);
+    if (P.onGround) {
+      if (wasAir && prevVy > 8) shake = Math.min(shake + 2, 8);
+      P.jumpsLeft = s.jumps;
+    }
+  }
   if (Math.abs(P.vx) > 0.5 && P.onGround) P.legPh += dt * 13;
 }
 
@@ -1274,6 +1368,16 @@ function startLevel(n, keepLives) {
   bonusMode = isBonusLevel(n);
   particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = []; corpses = [];
   boss = null; bossSpawned = false;
+  // build the arena: side platforms with ladders, higher decks and movers as levels rise
+  plats = []; ladders = [];
+  const mk = (x, y, w, move) => { const p = { x, y, w, move: move || null, cx: x, cy: y, dx: 0, dy: 0, ph: rnd(0, TAU) }; plats.push(p); return p; };
+  const p1 = mk(85 + rnd(0, 50), GROUND - 105, 175);
+  const p2 = mk(W - 310 - rnd(0, 50), GROUND - 125, 175);
+  if (n >= 3) mk(W / 2 - 95, GROUND - 200, 190);
+  if (n >= 6) mk(W / 2 - 65, GROUND - 95, 130, { axis: 'x', amp: Math.min(190, 90 + n * 2.5), speed: 0.8 + n * 0.012 });
+  if (n >= 14) mk(W - 170, GROUND - 255, 115, { axis: 'y', amp: 55, speed: 1.05 });
+  ladders.push({ x: p1.x + p1.w - 16, y0: p1.y, y1: GROUND });
+  ladders.push({ x: p2.x + 16, y0: p2.y, y1: GROUND });
   wave = 0; kills = 0; levelT = 0; banner = 2.6;
   streak = 0; streakT = 0;
   totalWaves = bonusMode ? 3 : Math.min(4, 2 + Math.floor(n / 14));
@@ -1290,6 +1394,7 @@ function updatePlay(dt) {
   levelT += dt; banner -= dt;
   streakT -= dt;
   if (streakT <= 0) streak = 0;
+  updatePlats(dt);
   if (!P.dead) updatePlayer(dt);
   for (let i = enemies.length - 1; i >= 0; i--) {
     if (enemies[i].dead) { enemies.splice(i, 1); continue; }
@@ -1605,6 +1710,35 @@ function drawBackground() {
   g.strokeStyle = z.accent; g.globalAlpha = 0.5; g.lineWidth = 2;
   g.beginPath(); g.moveTo(0, GROUND); g.lineTo(W, GROUND); g.stroke();
   g.globalAlpha = 1;
+}
+
+function drawPlats() {
+  const z = zoneOf(level);
+  for (const l of ladders) {
+    g.strokeStyle = '#727b8d'; g.lineWidth = 2.5;
+    g.beginPath();
+    g.moveTo(l.x - 7, l.y0); g.lineTo(l.x - 7, l.y1);
+    g.moveTo(l.x + 7, l.y0); g.lineTo(l.x + 7, l.y1);
+    g.stroke();
+    g.lineWidth = 2;
+    for (let y = l.y0 + 8; y < l.y1 - 2; y += 13) {
+      g.beginPath(); g.moveTo(l.x - 7, y); g.lineTo(l.x + 7, y); g.stroke();
+    }
+  }
+  for (const p of plats) {
+    g.fillStyle = '#10131b';
+    g.fillRect(p.cx, p.cy, p.w, 10);
+    g.strokeStyle = '#2a3040'; g.lineWidth = 1.5;
+    g.strokeRect(p.cx, p.cy, p.w, 10);
+    g.fillStyle = z.accent; g.globalAlpha = 0.8;
+    g.fillRect(p.cx, p.cy, p.w, 2.5);
+    g.globalAlpha = 1;
+    if (p.move) { // mover lights
+      g.fillStyle = '#ffe14d';
+      g.beginPath(); g.arc(p.cx + 6, p.cy + 6, 2, 0, TAU); g.fill();
+      g.beginPath(); g.arc(p.cx + p.w - 6, p.cy + 6, 2, 0, TAU); g.fill();
+    }
+  }
 }
 
 function drawDecals() {
@@ -2020,6 +2154,7 @@ function drawBoss(b) {
 function poseOf(ent, isPlayer) {
   if (isPlayer) {
     if (ent.hurtT > 0) return { pose: 'hurt' };
+    if (P.climbing) return { pose: 'cast' };
     if (P.spinT > 0) return { pose: 'slash', t: (P.spinT * 8) % 1 };
     if (P.castT > 0) return { pose: 'cast' };
     if (P.atkT > 0) return { pose: P.atkPose || 'punch', t: 1 - P.atkT / P.atkDur };
@@ -2230,7 +2365,7 @@ function drawMenu(dt) {
 
   g.font = '13px Courier New'; g.fillStyle = '#777'; g.textAlign = 'center';
   g.fillText('A/D move · W/SPACE jump · J attack (double-tap = double hit) · K kick (double-tap = double kick)', W / 2, 448);
-  g.fillText('Q/E switch weapon · L special · SHIFT dash · jump+K = flying kick · P pause · M mute', W / 2, 466);
+  g.fillText('Q/E switch weapon · L special · SHIFT dash · W/S climb ladders · S drop through · wall-cling + jump = wall jump', W / 2, 466);
   g.fillStyle = '#f0c428';
   g.fillText('TESTING BUILD — ALL 50 LEVELS UNLOCKED IN LEVEL SELECT', W / 2, 492);
 }
@@ -2396,10 +2531,10 @@ function frame(ts) {
     case 'play':
       updatePlay(dt);
       updateParticles(dt);
-      drawBackground(); drawDecals(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
+      drawBackground(); drawDecals(); drawPlats(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
       break;
     case 'pause':
-      drawBackground(); drawDecals(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
+      drawBackground(); drawDecals(); drawPlats(); drawCorpses(); drawGibs(); drawEffects(); drawEntities(); drawProjs(); drawParticles(); drawTexts(); drawHUD();
       drawPause();
       break;
     case 'powerup': updateParticles(dt); updateCorpses(dt); drawPowerup(rawDt); break;
