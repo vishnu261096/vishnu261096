@@ -7,11 +7,14 @@
 <style>
   html,body{margin:0;padding:0;background:#0a0a0c;height:100%;overflow:hidden;font-family:'Courier New',monospace}
   #wrap{display:flex;align-items:center;justify-content:center;height:100vh}
-  canvas{background:#000;box-shadow:0 0 60px #500a;image-rendering:auto;max-width:100vw;max-height:100vh;touch-action:none}
+  canvas{background:#000;width:100vw;height:100vh;object-fit:contain;image-rendering:auto;touch-action:none}
+  #rot{position:fixed;inset:0;background:#0a0a0c;color:#d61f1f;display:none;align-items:center;justify-content:center;z-index:9;text-align:center;font-size:30px;font-weight:bold;line-height:1.6}
+  @media (orientation: portrait){ #rot{display:flex} }
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="cv" width="960" height="540"></canvas></div>
+<div id="rot"><div>🔄<br>ROTATE YOUR PHONE<br><span style="font-size:15px;color:#999">STICK CARNAGE plays in landscape</span></div></div>
 <script src="game.js"></script>
 </body>
 </html>
