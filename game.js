@@ -20,7 +20,7 @@ function shade(hex, amt) {
   return 'rgb(' + r + ',' + gr + ',' + b + ')';
 }
 
-const TESTING = true; // testing phase: every level unlocked
+const TESTING = false; // release build: levels unlock by beating them
 
 /* ---------------- input ---------------- */
 const keys = {}, once = {};
@@ -198,7 +198,8 @@ function scheduleBeat(t, n, step) {
 /* ---------------- save ---------------- */
 let save = { unlocked: 1 };
 try { const s = localStorage.getItem('stickCarnage'); if (s) save = JSON.parse(s); } catch (e) {}
-if (TESTING) save.unlocked = 50;
+// release migration: wipe testing-build saves (which had everything unlocked)
+if (!save.v2) { save = { unlocked: 1, best: save.best || 0, v2: true }; persist(); }
 function persist() { try { localStorage.setItem('stickCarnage', JSON.stringify(save)); } catch (e) {} }
 
 /* ---------------- zones ---------------- */
@@ -2500,8 +2501,10 @@ function drawMenu(dt) {
     g.arc(W / 2 + 160 - i * 12, 320 + Math.sin(menuPulse * 5 + i) * 6, 3, 0, TAU); g.fill();
   }
 
-  if (button(W / 2 - 150, 240, 300, 44, 'START CARNAGE') || tap('Enter')) {
-    sfx('select'); startLevel(1);
+  const contLevel = clamp(save.unlocked, 1, 50);
+  const contLabel = contLevel > 1 ? 'CONTINUE — LEVEL ' + contLevel : 'START CARNAGE';
+  if (button(W / 2 - 150, 240, 300, 44, contLabel) || tap('Enter')) {
+    sfx('select'); startLevel(contLevel);
   }
   if (button(W / 2 - 150, 294, 300, 40, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
 
@@ -2518,7 +2521,7 @@ function drawMenu(dt) {
   g.fillText('A/D move · W/SPACE jump · J attack (double-tap = double hit) · K kick (double-tap = double kick)', W / 2, 448);
   g.fillText('Q/E switch weapon · L special · SHIFT dash · W/S climb ladders · S drop through · wall-cling + jump = wall jump', W / 2, 466);
   g.fillStyle = '#f0c428';
-  g.fillText('TESTING BUILD — ALL 50 LEVELS UNLOCKED IN LEVEL SELECT', W / 2, 492);
+  g.fillText('Beat a level to unlock the next — progress saves automatically. Die and you retry the SAME level.', W / 2, 492);
 }
 
 function drawSelect() {
@@ -2526,7 +2529,7 @@ function drawSelect() {
   g.font = 'bold 30px Courier New'; g.textAlign = 'center';
   g.fillStyle = '#d61f1f'; g.fillText('CHOOSE YOUR SLAUGHTER', W / 2, 56);
   g.font = 'bold 12px Courier New'; g.fillStyle = '#f0c428';
-  g.fillText('TESTING BUILD: every level unlocked', W / 2, 78);
+  g.fillText('Beat each level to unlock the next', W / 2, 78);
   const cw = 76, ch = 56, ox = (W - cw * 10) / 2 + cw / 2, oy = 100;
   for (let n = 1; n <= 50; n++) {
     const col = (n - 1) % 10, row = Math.floor((n - 1) / 10);
@@ -2584,6 +2587,8 @@ function drawPowerup(dt) {
     g.font = 'bold 17px Courier New'; g.fillStyle = '#ff4455';
     g.fillText('♥ EXTRA LIFE EARNED — ' + lives + ' LIVES ♥', W / 2, 352);
   }
+  g.font = 'bold 12px Courier New'; g.fillStyle = '#7bff4d';
+  g.fillText('✓ PROGRESS SAVED — LEVEL ' + Math.min(50, level + 1) + ' UNLOCKED', W / 2, 332);
   const nw = WEAPONS.find(x => x.lvl === level + 1);
   if (nw) {
     g.font = 'bold 15px Courier New'; g.fillStyle = '#7ec8ff';

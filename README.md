@@ -6,7 +6,7 @@ A brutal stickman fighting game with full blood & gore — built in pure HTML5 c
 
 **▶ Play it: open `index.html` in any browser. That's it.**
 
-> **TESTING BUILD: all 50 levels are unlocked in Level Select.**
+> Beat each level to unlock the next — progress saves automatically, and dying retries the same level (never back to level 1).
 
 ## Features
 
