@@ -14,6 +14,11 @@ const rnd = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = clamp((n >> 16) + amt, 0, 255), gr = clamp(((n >> 8) & 255) + amt, 0, 255), b = clamp((n & 255) + amt, 0, 255);
+  return 'rgb(' + r + ',' + gr + ',' + b + ')';
+}
 
 const TESTING = true; // testing phase: every level unlocked
 
@@ -231,6 +236,7 @@ let level = 1, wave = 0, totalWaves = 0, kills = 0, levelT = 0, banner = 0, nowT
 let bossSpawned = false, bonusMode = false;
 let streak = 0, streakT = 0;
 let lives = 3; // 3 lives per run; +1 every 5th boss; death = restore on the spot
+let score = 0; // run score; best kept in save.best
 let menuPulse = 0;
 
 /* ---------------- blood & gore ---------------- */
@@ -371,6 +377,7 @@ function killEnemy(e, kb, ctx) {
   ctx = ctx || {};
   e.hp = 0; e.dead = true;
   kills++;
+  score += Math.round((50 + level * 5) * (1 + streak * 0.15));
   const gore = ctx.gore || 1;
   if (ctx.headshot) headPop(e);
   else if (ctx.blade && Math.random() < (ctx.decap || 0)) decapitate(e, kb);
@@ -409,6 +416,7 @@ function killEnemy(e, kb, ctx) {
 function killBoss() {
   if (!boss || boss.dying) return;
   boss.dying = true; boss.hp = 0;
+  score += 1000 + level * 100;
   sfx('boss'); sfx('gib');
   shake = 26; hitstop = 0.25; flash = 0.5; slowmo = 1.1;
   for (let i = 0; i < 3; i++) gibBurst(boss.x + rnd(-20, 20), boss.y, boss.col, boss.scale, rnd(-6, 6), 2);
@@ -430,7 +438,7 @@ function levelClear() {
   if (level >= save.unlocked && !TESTING) { save.unlocked = Math.min(50, level + 1); persist(); }
   sfx('power');
 }
-let earnedLife = false;
+let earnedLife = false, newBest = false;
 
 /* ---------------- enemies ---------------- */
 const ETYPES = ['grunt', 'runner', 'brute', 'ninja', 'gunner', 'bomber', 'mage', 'shield'];
@@ -616,6 +624,8 @@ function damagePlayer(d, kb, src) {
       addDecal(P.x, 14);
       shake = 22;
       stateTimer = 0;
+      newBest = score > (save.best || 0);
+      if (newBest) { save.best = score; persist(); }
       state = 'gameover';
     }
   }
@@ -642,20 +652,34 @@ const LOOK_MOVES = {
   voidbeast:  ['vanish', 'summon', 'laser', 'spin'],
   death:      ['charge', 'slam', 'laser', 'summon', 'vanish', 'spin'],
 };
+/* 5 fighting styles × 10 creature bodies × held weapons = 50 distinct bosses */
+const BOSS_STYLES = [
+  { name: 'BLITZ STYLE',   spd: 1.45, hp: 0.9,  addMove: 'charge' },
+  { name: 'SNIPER STYLE',  spd: 1.0,  hp: 1,    addMove: 'shoot', projSpd: 1.4 },
+  { name: 'WARLOCK STYLE', spd: 1.0,  hp: 1,    addMove: 'summon' },
+  { name: 'PHANTOM STYLE', spd: 1.18, hp: 0.95, addMove: 'vanish' },
+  { name: 'JUGGERNAUT',    spd: 0.85, hp: 1.4,  addMove: 'slam' },
+];
+const BOSS_WEAPONS = ['sword', 'axe', 'spear', 'katana', 'bat'];
 function makeBoss() {
   const n = level;
   const zi = zoneIdx(n);
+  const variant = (n - 1) % 5;
+  const style = BOSS_STYLES[variant];
   const look = n === 50 ? 'death' : BOSS_LOOKS[zi];
-  const hpMul = n === 50 ? 1.8 : bonusMode ? 0.85 : 1;
+  const hpMul = (n === 50 ? 1.8 : bonusMode ? 0.85 : 1) * style.hp;
   const z = zoneOf(n);
   sfx('boss');
   banner = 0;
   return {
-    isBoss: true, look, name: BOSS_NAMES[n - 1],
+    isBoss: true, look, style, name: BOSS_NAMES[n - 1],
+    weaponHeld: BOSS_WEAPONS[(n - 1) % BOSS_WEAPONS.length],
     x: W - 130, y: GROUND, vx: 0, vy: 0, facing: -1, onGround: true,
     hp: (130 + n * 42) * hpMul, maxhp: (130 + n * 42) * hpMul,
-    dmg: 9 + n * 0.55, speed: 1.6 + n * 0.025,
-    scale: n === 50 ? 2.6 : 1.9 + zi * 0.05 + ((n - 1) % 5) * 0.06, col: z.accent,
+    dmg: 9 + n * 0.55, speed: (1.6 + n * 0.025) * style.spd,
+    projSpd: style.projSpd || 1,
+    scale: n === 50 ? 2.6 : 1.9 + zi * 0.05 + variant * 0.06,
+    col: n === 50 ? z.accent : shade(z.accent, (variant - 2) * 22),
     state: 'intro', t: 1.4, next: null, hurtT: 0, legPh: 0,
     enraged: false, dying: false, visible: true, atkT: 0,
     beamY: 0, armored: true, t2: 0, fleeT: 0,
@@ -663,7 +687,7 @@ function makeBoss() {
 }
 
 function bossChoose(b) {
-  const moves = LOOK_MOVES[b.look];
+  const moves = LOOK_MOVES[b.look].concat([b.style.addMove, b.style.addMove]);
   b.next = pick(moves);
   if (b.look === 'seamonster' && enemies.length > 5) b.next = 'shoot';
   if (b.next === 'summon' && enemies.length > 6) b.next = 'charge';
@@ -729,7 +753,8 @@ function updateBoss(b, dt) {
         b.t2 = b.enraged ? 0.13 : 0.2;
         sfx('shoot');
         const a = Math.atan2((P.y - 28) - (b.y - 50 * b.scale * 0.6), P.x - b.x) + rnd(-0.12, 0.12);
-        projs.push({ x: b.x + b.facing * 20, y: b.y - 50 * b.scale * 0.6, vx: Math.cos(a) * 7, vy: Math.sin(a) * 7, r: 5, dmg: b.dmg * 0.7, from: 'enemy', col: b.col, life: 3 });
+        const ps = 7 * (b.projSpd || 1);
+        projs.push({ x: b.x + b.facing * 20, y: b.y - 50 * b.scale * 0.6, vx: Math.cos(a) * ps, vy: Math.sin(a) * ps, r: 5, dmg: b.dmg * 0.7, from: 'enemy', col: b.col, life: 3 });
       }
       if (b.t <= 0) { b.state = 'recover'; b.t = 0.8; }
       break;
@@ -1231,7 +1256,7 @@ function updateParticles(dt) {
 /* ---------------- level flow ---------------- */
 function startLevel(n, keepLives) {
   level = n;
-  if (!keepLives) lives = 3;
+  if (!keepLives) { lives = 3; score = 0; }
   bonusMode = isBonusLevel(n);
   particles = []; gibs = []; decals = []; projs = []; effects = []; texts = []; enemies = []; corpses = [];
   boss = null; bossSpawned = false;
@@ -1242,6 +1267,7 @@ function startLevel(n, keepLives) {
   P.wIdx = P.weapons.length - 1; // newest weapon equipped
   const nw = WEAPONS.find(w => w.lvl === n);
   if (nw) floatText(W / 2, 240, 'NEW WEAPON: ' + nw.name, '#7ec8ff', true);
+  else if (n > 1) floatText(W / 2, 240, 'WEAPON REWARD: ARSENAL SHARPENED +4%', '#7ec8ff', false);
   state = 'play';
   spawnWave();
 }
@@ -1265,8 +1291,9 @@ function updatePlay(dt) {
     else {
       bossSpawned = true;
       boss = makeBoss();
-      floatText(W / 2, 170, BOSS_NAMES[level - 1], '#ff3333', true);
-      floatText(W / 2, 200, LOOK_LABEL[boss.look], '#ffe14d', true);
+      floatText(W / 2, 150, '— VS —', '#ffffff', true);
+      floatText(W / 2, 180, BOSS_NAMES[level - 1], '#ff3333', true);
+      floatText(W / 2, 208, LOOK_LABEL[boss.look] + ' · ' + boss.style.name, '#ffe14d', true);
     }
   }
   if (tap('p') || tap('Escape')) { state = 'pause'; }
@@ -1704,7 +1731,7 @@ function drawBoss(b) {
   switch (b.look) {
     case 'warrior': {
       // armored warlord: horned helm, spiked pauldrons, greatsword
-      drawStick(0, 0, s, col, f, { pose: b.atkT > 0 ? 'slash' : 'guard', t: b.atkT > 0 ? 1 - b.atkT / 0.25 : 0, run: Math.abs(b.vx) / 2, legPh: b.legPh, lw: 4.2 / s * s, eyes: eye, weapon: 'sword', time: t });
+      drawStick(0, 0, s, col, f, { pose: b.atkT > 0 ? 'slash' : 'guard', t: b.atkT > 0 ? 1 - b.atkT / 0.25 : 0, run: Math.abs(b.vx) / 2, legPh: b.legPh, lw: 4.2 / s * s, eyes: eye, weapon: b.weaponHeld, time: t });
       const hx = f * 2 * s, hy = -52 * s;
       g.beginPath(); g.moveTo(hx - 5 * s, hy - 4 * s); g.lineTo(hx - 9 * s, hy - 12 * s); g.stroke();
       g.beginPath(); g.moveTo(hx + 5 * s, hy - 4 * s); g.lineTo(hx + 9 * s, hy - 12 * s); g.stroke();
@@ -2083,7 +2110,10 @@ function drawHUD() {
   g.fillText(lbl + level + ' — ' + zoneOf(level).name, W - 16, 24);
   g.fillStyle = '#f55';
   g.fillText('KILLS ' + kills, W - 16, 42);
-  if (!bossSpawned) { g.fillStyle = '#aaa'; g.fillText('WAVE ' + wave + '/' + totalWaves, W - 16, 60); }
+  g.fillStyle = '#ffe14d';
+  g.fillText('SCORE ' + score, W - 16, 60);
+  if (save.best) { g.fillStyle = '#887'; g.fillText('BEST ' + save.best, W - 16, 76); }
+  if (!bossSpawned) { g.fillStyle = '#aaa'; g.fillText('WAVE ' + wave + '/' + totalWaves, W - 16, save.best ? 92 : 76); }
   if (P.combo > 2) {
     g.font = 'bold 22px Courier New'; g.textAlign = 'center';
     g.fillStyle = '#ffe14d';
@@ -2098,7 +2128,7 @@ function drawHUD() {
     bar(W / 2 - 220, H - 36, 440, 16, boss.hp / boss.maxhp, boss.enraged ? '#ff2222' : '#c41f7a', '#2a0515', '');
     g.font = 'bold 13px Courier New'; g.textAlign = 'center';
     g.fillStyle = '#fff';
-    g.fillText(boss.name + ' — ' + LOOK_LABEL[boss.look] + (boss.enraged ? '  [ENRAGED]' : ''), W / 2, H - 42);
+    g.fillText(boss.name + ' — ' + LOOK_LABEL[boss.look] + ' · ' + boss.style.name + (boss.enraged ? '  [ENRAGED]' : ''), W / 2, H - 42);
   }
   if (banner > 0) {
     g.globalAlpha = clamp(banner, 0, 1);
@@ -2161,6 +2191,15 @@ function drawMenu(dt) {
     sfx('select'); startLevel(1);
   }
   if (button(W / 2 - 150, 294, 300, 40, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
+
+  // credits
+  g.font = 'bold 17px Courier New'; g.textAlign = 'center';
+  g.fillStyle = '#ffe14d';
+  g.fillText('A GAME BY VISHNU KARTHIKEYAN', W / 2, 418);
+  if (save.best) {
+    g.font = 'bold 13px Courier New'; g.fillStyle = '#998';
+    g.fillText('HIGH SCORE: ' + save.best, W / 2, 226);
+  }
 
   g.font = '13px Courier New'; g.fillStyle = '#777'; g.textAlign = 'center';
   g.fillText('A/D move · W/SPACE jump · J attack (double-tap = double hit) · K kick (double-tap = double kick)', W / 2, 448);
@@ -2258,6 +2297,8 @@ function drawGameover(dt) {
   g.fillStyle = '#d61f1f'; g.fillText('YOU DIED', W / 2, 200);
   g.font = 'bold 15px Courier New'; g.fillStyle = '#aaa';
   g.fillText('Torn apart on level ' + level + ' · ' + kills + ' kills this run', W / 2, 240);
+  g.fillStyle = newBest ? '#ffe14d' : '#998';
+  g.fillText('SCORE ' + score + (newBest ? '  ★ NEW RECORD ★' : '  ·  BEST ' + (save.best || 0)), W / 2, 264);
   if (stateTimer > 0.6) {
     if (button(W / 2 - 150, 290, 300, 44, 'RETRY LEVEL ' + level) || tap('Enter')) { sfx('select'); startLevel(level); }
     if (button(W / 2 - 150, 344, 300, 36, 'LEVEL SELECT')) { sfx('select'); state = 'select'; }
@@ -2280,9 +2321,14 @@ function drawVictory(dt) {
   g.fillStyle = '#ffe14d';
   g.fillText('CARNAGE COMPLETE', W / 2, 170);
   g.font = 'bold 20px Courier New'; g.fillStyle = '#fff';
-  g.fillText('DEATH INCARNATE lies in pieces. All 50 levels conquered.', W / 2, 220);
+  g.fillText('DEATH ITSELF lies in pieces. All 50 bosses conquered.', W / 2, 220);
   g.fillText('All 50 powers and 16 weapons are yours. You ARE the apocalypse.', W / 2, 250);
-  drawStick(W / 2, 380, 2, '#fff', 1, { pose: 'cast', eyes: '#ffe14d' });
+  if (score > (save.best || 0)) { save.best = score; persist(); }
+  g.fillStyle = '#ffe14d';
+  g.fillText('FINAL SCORE: ' + score, W / 2, 285);
+  g.font = 'bold 16px Courier New';
+  g.fillText('CREATED BY VISHNU KARTHIKEYAN', W / 2, 315);
+  drawStick(W / 2, 400, 2, '#fff', 1, { pose: 'cast', eyes: '#ffe14d' });
   if (button(W / 2 - 150, 430, 300, 40, 'BACK TO MENU')) { sfx('select'); state = 'menu'; }
 }
 

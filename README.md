@@ -1,4 +1,6 @@
-# STICK CARNAGE 🩸 (18+ — EXTREME VIOLENCE) — v3 RELEASE
+# STICK CARNAGE 🩸 (18+ — EXTREME VIOLENCE) — v4 RELEASE
+
+*A game by **Vishnu Karthikeyan***
 
 A brutal stickman fighting game with full blood & gore — built in pure HTML5 canvas + JavaScript, zero dependencies.
 
@@ -16,6 +18,11 @@ A brutal stickman fighting game with full blood & gore — built in pure HTML5 c
   Ghost → Beast King (lion) → Arch-Devil → Void Horror → and on level 50, **DEATH ITSELF**,
   a scythe-wielding reaper. Each creature is drawn uniquely with its own attack patterns,
   and all bosses **enrage** at half HP.
+- **All 50 bosses are unique**: every boss combines a creature body with one of 5 fighting
+  styles (Blitz / Sniper / Warlock / Phantom / Juggernaut) and its own held weapon and
+  colors — verified: 50 distinct combinations, no two bosses alike.
+- **Score & high-score system**: kills scale with your streak, bosses are worth big points,
+  your best run is saved — beat your record.
 - **3 lives per run** — when you die you **restore on the spot** with full HP and a
   protective blast. Every 5th boss slain earns **+1 extra life**. Lose all lives = game over.
 - **Enemies improve their fighting skills every zone**: they dodge your attacks, ninjas
