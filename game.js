@@ -468,10 +468,24 @@ function hitEnemies(x0, x1, dmg, kb, opts) {
 }
 
 function damageEnemy(e, d, kb, isBoss, ctx) {
+  // shields block most frontal damage
+  if (!isBoss && e.type === 'shield' && Math.sign(kb || 1) === -e.facing) {
+    d *= 0.35;
+    if (Math.random() < 0.4) floatText(e.x, e.y - 60, 'BLOCKED', '#b8c4d0', false);
+  }
   e.hp -= d;
-  e.hurtT = 0.18;
+  // poise: enemies cannot be stun-locked — stagger has a cooldown
+  if (!isBoss) {
+    if (!e.poiseT || e.poiseT <= 0) {
+      e.hurtT = 0.18;
+      e.poiseT = (e.type === 'brute' || e.type === 'shield' || e.elite) ? 2.4 : 1.2;
+    }
+  } else e.hurtT = 0.18;
   if (d >= 2 && Math.random() < 0.8) floatText(e.x + rnd(-10, 10), e.y - 52 * (e.scale || 1) - rnd(0, 12), String(Math.round(d)), '#ffd9a0', false);
-  if (!isBoss || !e.armored) { e.vx += kb * 0.25 * P.stats.kbMul; }
+  if (!isBoss || !e.armored) {
+    const kbRes = (e.elite || e.type === 'brute' || e.type === 'shield') ? 0.45 : 1;
+    e.vx += kb * 0.17 * P.stats.kbMul * kbRes;
+  }
   blood(e.x, e.y - 25 * (e.scale || 1), Math.min(18, 4 + d * 0.25), Math.sign(kb), 4);
   if (P.stats.lifesteal) P.hp = Math.min(P.stats.maxhp, P.hp + d * P.stats.lifesteal);
   P.combo++; P.comboT = 2;
@@ -567,13 +581,13 @@ function makeEnemy(type, x) {
     ? (n >= 44 ? 'katana' : n >= 32 ? 'sword' : n >= 20 ? 'machete' : n >= 8 ? 'knife' : null) : null;
   const e = {
     type, x, y: GROUND, vx: 0, vy: 0, facing: -1, onGround: true,
-    hp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
-    maxhp: (16 + n * 4.2) * base * (bonusMode ? 0.7 : 1),
-    dmg: (5 + n * 0.38) * (type === 'brute' ? 1.6 : 1) * (blade ? 1.3 : 1),
+    hp: (18 + n * 5.5) * base * (bonusMode ? 0.7 : 1),
+    maxhp: (18 + n * 5.5) * base * (bonusMode ? 0.7 : 1),
+    dmg: (6 + n * 0.55) * (type === 'brute' ? 1.6 : 1) * (blade ? 1.3 : 1),
     speed: { grunt: 1.6, runner: 3.4, brute: 1.1, ninja: 2.4, gunner: 1.4, bomber: 3.0, mage: 1.0, shield: 1.2 }[type] + n * 0.02 + skill * 0.12,
     cd: rnd(0.5, 1.4), col: ECOL[type], scale: type === 'brute' ? 1.35 : type === 'shield' ? 1.15 : 1,
     hurtT: 0, legPh: rnd(0, TAU), dead: false, jumpCd: rnd(0.5, 2), t: 0,
-    fleeT: 0, screamT: 0, atkT: 0,
+    fleeT: 0, screamT: 0, atkT: 0, poiseT: 0,
     skill, dodgeCd: rnd(0, 1), burst: 0, slamCd: rnd(2, 4), blade, elite: false,
   };
   // elites: bigger, meaner, glowing — worth a bounty
@@ -588,8 +602,8 @@ function spawnWave() {
   wave++;
   const zi = zoneIdx(level);
   const pool = ETYPES.slice(0, Math.min(8, 2 + zi));
-  let count = 4 + Math.floor(level / 6) + (bonusMode ? 3 : 0);
-  count = Math.min(count, 13);
+  let count = 5 + Math.floor(level / 5) + (bonusMode ? 3 : 0);
+  count = Math.min(count, 15);
   for (let i = 0; i < count; i++) {
     const side = i % 2 === 0 ? rnd(W + 20, W + 180) : rnd(-180, -20);
     enemies.push(makeEnemy(pick(pool), side));
@@ -600,7 +614,7 @@ function spawnWave() {
 function updateEnemy(e, dt) {
   const f = dt * 60;
   e.t += dt;
-  e.cd -= dt; e.hurtT -= dt; e.jumpCd -= dt; e.dodgeCd -= dt; e.slamCd -= dt;
+  e.cd -= dt; e.hurtT -= dt; e.jumpCd -= dt; e.dodgeCd -= dt; e.slamCd -= dt; e.poiseT -= dt;
   const dx = P.x - e.x, adx = Math.abs(dx);
   let want = 0;
 
@@ -720,7 +734,7 @@ function damagePlayer(d, kb, src) {
   const s = P.stats;
   d *= s.defMul;
   P.hp -= d;
-  P.inv = 0.7; P.hurtT = 0.25;
+  P.inv = 0.45; P.hurtT = 0.25;
   if (!s.kbImmune) P.vx += kb;
   if (s.rageFuel) P.energy = Math.min(s.energyMax, P.energy + d * 0.8);
   if (s.thorns && src) damageEnemy(src, d * s.thorns, -kb, false);
@@ -805,8 +819,8 @@ function makeBoss() {
     isBoss: true, look, style, name: BOSS_NAMES[n - 1],
     weaponHeld: BOSS_WEAPONS[(n - 1) % BOSS_WEAPONS.length],
     x: W - 130, y: GROUND, vx: 0, vy: 0, facing: -1, onGround: true,
-    hp: (130 + n * 42) * hpMul, maxhp: (130 + n * 42) * hpMul,
-    dmg: 9 + n * 0.55, speed: (1.6 + n * 0.025) * style.spd,
+    hp: (160 + n * 58) * hpMul, maxhp: (160 + n * 58) * hpMul,
+    dmg: 10 + n * 0.72, speed: (1.7 + n * 0.03) * style.spd,
     projSpd: style.projSpd || 1,
     scale: n === 50 ? 2.6 : 1.9 + zi * 0.05 + variant * 0.06,
     col: n === 50 ? z.accent : shade(z.accent, (variant - 2) * 22),
@@ -829,7 +843,7 @@ function updateBoss(b, dt) {
   const f = dt * 60;
   b.t -= dt; b.hurtT -= dt;
   if (!b.enraged && b.hp < b.maxhp * 0.5) {
-    b.enraged = true; b.speed *= 1.35;
+    b.enraged = true; b.speed *= 1.35; b.dmg *= 1.25;
     floatText(b.x, b.y - 120, 'ENRAGED!', '#ff3333', true);
     blood(b.x, b.y - 50, 20, 0, 6);
     sfx('boss');
@@ -844,10 +858,10 @@ function updateBoss(b, dt) {
     case 'idle': {
       const dx = P.x - b.x;
       if (Math.abs(dx) > 90) b.vx += Math.sign(dx) * spd * 0.12 * f;
-      if (Math.abs(dx) < 60 * b.scale && b.t < 0.3 && Math.abs(P.y - b.y) < 70) {
+      if (Math.abs(dx) < 60 * b.scale && b.t < 0.45 && Math.abs(P.y - b.y) < 70) {
         b.atkT = 0.25;
         damagePlayer(b.dmg, b.facing * 6, b);
-        b.t = 0.9;
+        b.t = 0.6;
       }
       // no camping on platforms: bosses answer with a volley
       b.airT = (P.y < b.y - 80) ? (b.airT || 0) + dt : 0;
@@ -1033,13 +1047,13 @@ function meleeAttack(w, double) {
 function kickAttack(double) {
   const s = P.stats;
   const air = !P.onGround;
-  const mult = (double ? 2.2 : 1) * (air ? 1.8 : 1);
-  P.cd = (0.5 * (double ? 1.4 : 1)) / s.atkSpd;
+  const mult = (double ? 1.9 : 1) * (air ? 1.6 : 1);
+  P.cd = (0.55 * (double ? 1.4 : 1)) / s.atkSpd;
   P.atkDur = air ? 0.32 : double ? 0.36 : 0.28;
   P.atkT = P.atkDur;
   P.atkPose = air ? 'jumpkick' : double ? 'kick2' : 'kick';
   const range = (air ? 66 : 58) * s.range;
-  const hit = hitEnemies(P.x, P.x + P.facing * range, 17 * playerDmg() * s.kickMul * mult, air ? 9 : 6, { yBand: P.y - 30, ctx: { gore: air ? 1.5 : 1 } });
+  const hit = hitEnemies(P.x, P.x + P.facing * range, 14 * playerDmg() * s.kickMul * mult, air ? 8 : 5, { yBand: P.y - 30, ctx: { gore: air ? 1.5 : 1 } });
   sfx(hit ? 'kick' : 'dash');
   if (air && hit) floatText(P.x + P.facing * 40, P.y - 80, 'FLYING KICK!', '#7ec8ff', false);
   else if (double) floatText(P.x + P.facing * 30, P.y - 70, 'DOUBLE KICK!', '#ffe14d', false);
@@ -1487,7 +1501,7 @@ function startLevel(n, keepLives) {
   ladders.push({ x: p2.x + 16, y0: p2.y, y1: GROUND });
   wave = 0; kills = 0; levelT = 0; banner = 2.6;
   streak = 0; streakT = 0;
-  totalWaves = bonusMode ? 3 : Math.min(4, 2 + Math.floor(n / 14));
+  totalWaves = bonusMode ? 3 : Math.min(5, 2 + Math.floor(n / 11));
   P = makePlayer();
   P.wIdx = P.weapons.length - 1; // newest weapon equipped
   const nw = WEAPONS.find(w => w.lvl === n);
