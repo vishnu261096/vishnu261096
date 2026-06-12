@@ -204,16 +204,16 @@ function persist() { try { localStorage.setItem('stickCarnage', JSON.stringify(s
 
 /* ---------------- zones ---------------- */
 const ZONES = [
-  { name: 'TRAINING GROUNDS', sky: ['#2b3a55', '#10131d'], ground: '#2a2f3a', accent: '#7da0d0', sil: 'hills' },
-  { name: 'NEON CITY',        sky: ['#1a0a2e', '#05030a'], ground: '#1c1530', accent: '#ff2bd6', sil: 'city' },
-  { name: 'CRIMSON FOREST',   sky: ['#3d1020', '#120408'], ground: '#26101a', accent: '#e0455a', sil: 'trees' },
-  { name: 'FROZEN WASTES',    sky: ['#2e4a66', '#0c1622'], ground: '#3a4f63', accent: '#aee6ff', sil: 'spikes' },
-  { name: 'SCORCHED DESERT',  sky: ['#6e3a14', '#1c0d04'], ground: '#4d2c10', accent: '#ffb347', sil: 'dunes' },
-  { name: 'TOXIC SEWERS',     sky: ['#1d3320', '#060d07'], ground: '#1f3322', accent: '#7bff4d', sil: 'pipes' },
-  { name: 'SHADOW TEMPLE',    sky: ['#241a3d', '#0a0612'], ground: '#221a36', accent: '#9b6bff', sil: 'pillars' },
-  { name: 'SKY FORTRESS',     sky: ['#3f5e8a', '#101b2a'], ground: '#324257', accent: '#ffe27a', sil: 'towers' },
-  { name: 'HELL GATES',       sky: ['#5a0d0d', '#160202'], ground: '#3a0d0d', accent: '#ff5722', sil: 'flames' },
-  { name: 'THE VOID',         sky: ['#0d0d1a', '#000000'], ground: '#15152a', accent: '#c44dff', sil: 'void' },
+  { name: 'TRAINING GROUNDS', sky: ['#46669c', '#141c30'], ground: '#333c4e', accent: '#6ec8ff', sil: 'hills' },
+  { name: 'NEON CITY',        sky: ['#41136e', '#0c051c'], ground: '#241a44', accent: '#ff36e0', sil: 'city' },
+  { name: 'CRIMSON FOREST',   sky: ['#84163a', '#200712'], ground: '#34121f', accent: '#ff4d6a', sil: 'trees' },
+  { name: 'FROZEN WASTES',    sky: ['#3f84c2', '#10263e'], ground: '#42586e', accent: '#9fe8ff', sil: 'spikes' },
+  { name: 'SCORCHED DESERT',  sky: ['#c8721c', '#301606'], ground: '#5c3614', accent: '#ffc04d', sil: 'dunes' },
+  { name: 'TOXIC SEWERS',     sky: ['#2e6432', '#0b180c'], ground: '#27402a', accent: '#6dff3f', sil: 'pipes' },
+  { name: 'SHADOW TEMPLE',    sky: ['#4c2c96', '#140b28'], ground: '#2b2144', accent: '#b07aff', sil: 'pillars' },
+  { name: 'SKY FORTRESS',     sky: ['#6294d6', '#182840'], ground: '#3c4f68', accent: '#ffd34d', sil: 'towers' },
+  { name: 'HELL GATES',       sky: ['#aa1c1c', '#280505'], ground: '#481111', accent: '#ff6a1f', sil: 'flames' },
+  { name: 'THE VOID',         sky: ['#221450', '#03030a'], ground: '#1b1b36', accent: '#d44dff', sil: 'void' },
 ];
 
 const BOSS_NAMES = [
@@ -488,6 +488,11 @@ function damageEnemy(e, d, kb, isBoss, ctx) {
     e.vx += kb * 0.17 * P.stats.kbMul * kbRes;
   }
   blood(e.x, e.y - 25 * (e.scale || 1), Math.min(18, 4 + d * 0.25), Math.sign(kb), 4);
+  if (particles.length < 640) {
+    for (let i = 0; i < 4; i++) {
+      particles.push({ x: e.x, y: e.y - 30 * (e.scale || 1), vx: rnd(-6, 6), vy: rnd(-5, 1), r: rnd(1, 2), col: pick(['#ffffff', '#ffe89a', '#ffd24d']), life: rnd(0.15, 0.3), grav: 0.3, type: 'spark' });
+    }
+  }
   if (P.stats.lifesteal) P.hp = Math.min(P.stats.maxhp, P.hp + d * P.stats.lifesteal);
   P.combo++; P.comboT = 2;
   if (e.hp <= 0) {
@@ -604,7 +609,7 @@ function spawnWave() {
   const zi = zoneIdx(level);
   const pool = ETYPES.slice(0, Math.min(8, 2 + zi));
   let count = 5 + Math.floor(level / 5) + (bonusMode ? 3 : 0);
-  count = Math.min(count, 15);
+  count = Math.min(count, 16);
   for (let i = 0; i < count; i++) {
     const side = i % 2 === 0 ? rnd(W + 20, W + 180) : rnd(-180, -20);
     enemies.push(makeEnemy(pick(pool), side));
@@ -1545,6 +1550,9 @@ function updatePlay(dt) {
    ============================================================ */
 function seg2(ax, ay, bx, by, cx, cy) {
   g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cx, cy); g.stroke();
+  // hand/foot ball at the end of every limb — instant 3D feel
+  g.fillStyle = g.strokeStyle;
+  g.beginPath(); g.arc(cx, cy, g.lineWidth * 0.62, 0, TAU); g.fill();
 }
 function drawLimb(ax, ay, bx, by, bend) {
   const mxp = (ax + bx) / 2, myp = (ay + by) / 2;
@@ -1555,6 +1563,8 @@ function drawLimb(ax, ay, bx, by, bend) {
   g.moveTo(ax, ay);
   g.quadraticCurveTo(mxp + nx * bend, myp + ny * bend, bx, by);
   g.stroke();
+  g.fillStyle = g.strokeStyle;
+  g.beginPath(); g.arc(bx, by, g.lineWidth * 0.62, 0, TAU); g.fill();
 }
 function fist(x, y, s, col) {
   g.fillStyle = col;
@@ -1631,9 +1641,19 @@ function drawWeapon(id, hx, hy, ang, s, col) {
   g.restore();
 }
 
-/* kung-fu stickman renderer */
+/* kung-fu stickman renderer — cel-shaded with drop shadows */
 function drawStick(x, y, s, col, facing, o) {
   o = o || {};
+  // soft contact shadow on the surface below
+  if (o.shadowAt !== undefined) {
+    const k = clamp(1 - (o.shadowAt - y) / 340, 0.35, 1);
+    g.fillStyle = 'rgba(0,0,0,0.38)';
+    g.beginPath(); g.ellipse(x, o.shadowAt + 3, 15 * s * k, 4.2 * k, 0, 0, TAU); g.fill();
+  }
+  // offset shadow on every stroke = cheap 3D depth
+  g.shadowColor = 'rgba(0,0,0,0.45)';
+  g.shadowOffsetX = 2.5 * Math.min(s, 1.6);
+  g.shadowOffsetY = 4 * Math.min(s, 1.6);
   g.strokeStyle = col;
   g.lineWidth = (o.lw || 3.5) * s;
   g.lineCap = 'round';
@@ -1657,12 +1677,19 @@ function drawStick(x, y, s, col, facing, o) {
   const shX = x + lean, shY = y - 44 * s + bob;
   const hx = shX + facing * 2 * s, hy = shY - 8 * s;
 
-  // head (or gushing neck stub)
+  // head: shaded 3D sphere (or gushing neck stub)
   if (!o.noHead) {
-    g.beginPath(); g.arc(hx, hy, 7 * s, 0, TAU); g.stroke();
+    g.fillStyle = col;
+    g.beginPath(); g.arc(hx, hy, 7 * s, 0, TAU); g.fill();
+    const hg = g.createRadialGradient(hx - 2.5 * s, hy - 3 * s, 0.5 * s, hx, hy, 7.5 * s);
+    hg.addColorStop(0, 'rgba(255,255,255,0.85)');
+    hg.addColorStop(0.45, 'rgba(255,255,255,0.08)');
+    hg.addColorStop(1, 'rgba(0,0,0,0.38)');
+    g.fillStyle = hg;
+    g.beginPath(); g.arc(hx, hy, 7 * s, 0, TAU); g.fill();
     if (o.eyes) {
       g.fillStyle = o.eyes;
-      g.beginPath(); g.arc(hx + facing * 3 * s, hy - 1.5 * s, 1.6 * s, 0, TAU); g.fill();
+      g.beginPath(); g.arc(hx + facing * 3 * s, hy - 1.5 * s, 1.7 * s, 0, TAU); g.fill();
     }
   } else {
     g.fillStyle = '#a00';
@@ -1798,6 +1825,7 @@ function drawStick(x, y, s, col, facing, o) {
     fist(f1x, f1y, s, col); fist(f2x, f2y, s, col);
     if (o.weapon) weaponHand(f1x, f1y, -0.6);
   }
+  g.shadowColor = 'transparent'; g.shadowOffsetX = 0; g.shadowOffsetY = 0;
 }
 
 function drawBackground() {
@@ -1829,9 +1857,24 @@ function drawBackground() {
       g.beginPath(); g.arc(bx, 80 + srand() * 280, 1 + srand() * 2.5, 0, TAU); g.fill();
     }
   }
-  g.fillStyle = z.ground;
+  // drifting glow orbs for atmosphere
+  g.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 6; i++) {
+    const ox = ((i * 173 + levelT * (8 + i * 3)) % (W + 200)) - 100;
+    const oy = 80 + ((i * 97) % 260) + Math.sin(levelT * 0.7 + i) * 18;
+    const og = g.createRadialGradient(ox, oy, 2, ox, oy, 36);
+    og.addColorStop(0, z.accent); og.addColorStop(1, 'rgba(0,0,0,0)');
+    g.globalAlpha = 0.15;
+    g.fillStyle = og;
+    g.beginPath(); g.arc(ox, oy, 36, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
+  const gg = g.createLinearGradient(0, GROUND, 0, H);
+  gg.addColorStop(0, z.ground); gg.addColorStop(1, '#050508');
+  g.fillStyle = gg;
   g.fillRect(0, GROUND, W, H - GROUND);
-  g.strokeStyle = z.accent; g.globalAlpha = 0.5; g.lineWidth = 2;
+  g.strokeStyle = z.accent; g.globalAlpha = 0.8; g.lineWidth = 2.5;
   g.beginPath(); g.moveTo(0, GROUND); g.lineTo(W, GROUND); g.stroke();
   g.globalAlpha = 1;
 }
@@ -1887,6 +1930,7 @@ function drawCorpses() {
 }
 
 function drawGibs() {
+  g.shadowColor = 'rgba(0,0,0,0.4)'; g.shadowOffsetX = 2; g.shadowOffsetY = 3;
   for (const gb of gibs) {
     g.save();
     g.translate(gb.x, gb.y);
@@ -1906,13 +1950,30 @@ function drawGibs() {
     g.restore();
   }
   g.globalAlpha = 1;
+  g.shadowColor = 'transparent'; g.shadowOffsetX = 0; g.shadowOffsetY = 0;
 }
 
 function drawParticles() {
   for (const p of particles) {
     g.globalAlpha = clamp(p.life * 1.5, 0, 1);
-    g.fillStyle = p.col;
-    g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+    if (p.type === 'blood') {
+      // motion-streaked droplets
+      g.strokeStyle = p.col; g.lineWidth = p.r * 1.5; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * 1.6, p.y - p.vy * 1.6); g.stroke();
+    } else if (p.type === 'spark' || p.type === 'flame') {
+      g.globalCompositeOperation = 'lighter';
+      if (p.type === 'spark') {
+        g.strokeStyle = p.col; g.lineWidth = p.r * 1.4;
+        g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * 2, p.y - p.vy * 2); g.stroke();
+      } else {
+        g.fillStyle = p.col;
+        g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+      }
+      g.globalCompositeOperation = 'source-over';
+    } else {
+      g.fillStyle = p.col;
+      g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+    }
   }
   g.globalAlpha = 1;
 }
@@ -1938,6 +1999,8 @@ function drawProjs() {
 function drawEffects() {
   for (const e of effects) {
     const k = e.t / e.dur;
+    // additive blending makes every blast glow
+    if (e.type !== 'blackhole') g.globalCompositeOperation = 'lighter';
     if (e.type === 'shockwave') {
       g.strokeStyle = e.col; g.lineWidth = 6 * (1 - k) + 1;
       g.globalAlpha = 1 - k;
@@ -1982,6 +2045,7 @@ function drawEffects() {
       g.beginPath(); g.arc(e.x, e.y, 52 + Math.sin(e.t * 7) * 10, -e.t * 4, -e.t * 4 + 3); g.stroke();
     }
     g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
   }
 }
 
@@ -1995,7 +2059,19 @@ function drawBoss(b) {
   g.translate(b.x, b.y);
   if (b.state === 'charge') g.rotate((b.chargeDir || f) * 0.13);
   if (b.state === 'spin') g.rotate(Math.sin(t * 18) * 0.35);
+  // contact shadow + menacing glow aura
+  g.fillStyle = 'rgba(0,0,0,0.4)';
+  g.beginPath(); g.ellipse(0, 3, 28 * s, 6.5, 0, 0, TAU); g.fill();
+  g.globalCompositeOperation = 'lighter';
+  const aura = g.createRadialGradient(0, -38 * s, 4, 0, -38 * s, 58 * s);
+  aura.addColorStop(0, b.col); aura.addColorStop(1, 'rgba(0,0,0,0)');
+  g.globalAlpha = (b.enraged ? 0.30 : 0.20) + 0.07 * Math.sin(t * 4);
+  g.fillStyle = aura;
+  g.beginPath(); g.arc(0, -38 * s, 58 * s, 0, TAU); g.fill();
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
   if (b.state === 'tele') g.globalAlpha = 0.55 + 0.45 * Math.sin(t * 30);
+  g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowOffsetX = 3; g.shadowOffsetY = 5;
   g.strokeStyle = col; g.fillStyle = col;
   g.lineWidth = Math.max(3.5, 2.2 * s); g.lineCap = 'round'; g.lineJoin = 'round';
   const E = (x, y, r) => { g.fillStyle = eye; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); g.fillStyle = col; };
@@ -2298,6 +2374,7 @@ function drawEntities() {
     const o = poseOf(e, false);
     o.run = Math.abs(e.vx) / 2; o.legPh = e.legPh; o.time = levelT + e.t;
     o.eyes = e.fleeT > 0 ? '#fff' : e.elite ? '#ffe14d' : '#f33';
+    o.shadowAt = e.standPlat ? e.standPlat.cy : GROUND;
     if (e.blade) o.weapon = e.blade;
     if (e.elite) {
       // golden aura under elite fighters
@@ -2343,8 +2420,17 @@ function drawEntities() {
     const o = poseOf(P, true);
     o.run = Math.abs(P.vx) / 2.2; o.legPh = P.legPh; o.time = levelT;
     o.eyes = '#3df';
+    o.shadowAt = P.standPlat ? P.standPlat.cy : GROUND;
     const w = P.weapons[P.wIdx];
     if (w && w.id !== 'fists') o.weapon = w.id;
+    // hero glow — red when bloodlust rages, cyan otherwise
+    g.globalCompositeOperation = 'lighter';
+    const pg = g.createRadialGradient(P.x, P.y - 28, 3, P.x, P.y - 28, 46);
+    pg.addColorStop(0, P.bloodlustT > 0 ? 'rgba(255,60,60,0.5)' : 'rgba(80,180,255,0.35)');
+    pg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = pg;
+    g.beginPath(); g.arc(P.x, P.y - 28, 46, 0, TAU); g.fill();
+    g.globalCompositeOperation = 'source-over';
     if (P.inv > 0 && Math.sin(levelT * 40) > 0) g.globalAlpha = 0.45;
     drawStick(P.x, P.y, 1.05, '#ffffff', P.facing, o);
     g.globalAlpha = 1;
@@ -2374,6 +2460,11 @@ function bar(x, y, w, h, frac, fg, bg, label) {
 
 function drawHUD() {
   const s = P.stats;
+  // danger pulse when near death
+  if (P.hp < s.maxhp * 0.3 && !P.dead) {
+    g.fillStyle = 'rgba(200,0,0,' + (0.10 + 0.07 * Math.sin(levelT * 6)).toFixed(3) + ')';
+    g.fillRect(0, 0, W, H);
+  }
   bar(16, 14, 220, 18, P.hp / s.maxhp, '#d61f1f', '#3a0a0a', 'HP ' + Math.ceil(Math.max(0, P.hp)));
   bar(16, 36, 180, 12, P.energy / s.energyMax, '#f0c428', '#3a3008', '');
   // lives
@@ -2401,7 +2492,9 @@ function drawHUD() {
   if (save.best) { g.fillStyle = '#887'; g.fillText('BEST ' + save.best, W - 16, 76); }
   if (!bossSpawned) { g.fillStyle = '#aaa'; g.fillText('WAVE ' + wave + '/' + totalWaves, W - 16, save.best ? 92 : 76); }
   if (P.combo > 2) {
-    g.font = 'bold 22px Courier New'; g.textAlign = 'center';
+    const cs = Math.round(22 + Math.sin(levelT * 10) * 3 + Math.min(8, P.combo * 0.3));
+    g.font = 'bold ' + cs + 'px Courier New'; g.textAlign = 'center';
+    g.fillStyle = '#000'; g.fillText(P.combo + ' HIT COMBO', W / 2 + 2, 72);
     g.fillStyle = '#ffe14d';
     g.fillText(P.combo + ' HIT COMBO', W / 2, 70);
   }
